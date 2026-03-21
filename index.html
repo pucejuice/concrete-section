@@ -1,0 +1,768 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Concrete Section Drafter</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=DM+Sans:wght@400;500;600;700&display=swap');
+:root{--bg:#0f1117;--panel:#181b24;--panel-border:#262a36;--accent:#bada55;--text:#e0e2e8;--text-dim:#7a7f8e;--input-bg:#1e2230;--input-border:#363b4a;--radius:8px;}
+*{margin:0;padding:0;box-sizing:border-box;}
+body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;min-height:100vh;overflow:hidden;}
+.app-header{display:flex;align-items:center;gap:12px;padding:14px 24px;border-bottom:1px solid var(--panel-border);background:var(--panel);}
+.app-header h1{font-family:'JetBrains Mono',monospace;font-size:15px;font-weight:700;color:var(--accent);letter-spacing:1px;}
+.app-header span{font-size:11px;color:var(--text-dim);font-family:'JetBrains Mono',monospace;}
+.app-layout{display:grid;grid-template-columns:380px 1fr;height:calc(100vh - 49px);}
+.controls{background:var(--panel);border-right:1px solid var(--panel-border);overflow:hidden;display:flex;flex-direction:column;}
+.controls-sticky{padding:12px 18px 8px;background:var(--panel);border-bottom:1px solid var(--panel-border);flex-shrink:0;display:flex;flex-direction:column;gap:8px;z-index:2;}
+.controls-scroll{padding:8px 18px 16px;overflow-y:auto;flex:1;display:flex;flex-direction:column;gap:10px;}
+.controls-footer{padding:8px 18px 12px;background:var(--panel);border-top:1px solid var(--panel-border);flex-shrink:0;}
+.section-label{font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--text-dim);margin-bottom:2px;}
+.input-group{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
+.field{display:flex;flex-direction:column;gap:3px;}
+.field label{font-size:11px;color:var(--text-dim);font-weight:500;}
+.field input,.field select{background:var(--input-bg);border:1px solid var(--input-border);border-radius:var(--radius);padding:7px 10px;color:var(--text);font-family:'JetBrains Mono',monospace;font-size:13px;outline:none;transition:border-color .2s;}
+.field input:focus,.field select:focus{border-color:var(--accent);}
+.segmented{display:flex;background:var(--input-bg);border:1px solid var(--input-border);border-radius:var(--radius);overflow:hidden;}
+.segmented button{flex:1;padding:7px 4px;font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:600;border:none;background:transparent;color:var(--text-dim);cursor:pointer;transition:all .2s;}
+.segmented button.active{background:var(--accent);color:#111;}
+.divider{height:1px;background:var(--panel-border);margin:2px 0;}
+.export-btn{width:100%;padding:11px;font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;letter-spacing:1px;background:var(--accent);color:#111;border:none;border-radius:var(--radius);cursor:pointer;transition:opacity .2s;}
+.export-btn:hover{opacity:.85;}
+.canvas-area{background:var(--bg);display:flex;align-items:center;justify-content:center;position:relative;overflow:hidden;}
+.canvas-area svg{width:100%;height:100%;}
+.canvas-info{position:absolute;bottom:10px;right:14px;font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--text-dim);}
+@media(max-width:900px){
+  .app-header h1{font-size:12px;}.app-header span{display:none;}
+  .app-layout{grid-template-columns:1fr;grid-template-rows:1fr auto;}
+  .canvas-area{order:1;min-height:0;}.controls{order:2;max-height:55vh;border-right:none;border-top:1px solid var(--panel-border);}
+}
+</style>
+</head>
+<body>
+<div class="app-header">
+  <h1>CONCRETE SECTION DRAFTER</h1>
+  <span>// reinforcing cross-section → DXF</span>
+</div>
+<div class="app-layout">
+  <div class="controls" id="controls">
+    <div class="controls-sticky">
+      <div class="section-label">Reinforcing Type</div>
+      <div class="segmented" id="modeSeg">
+        <button class="active" data-val="column">Column</button>
+        <button data-val="slab">Slab / Wall</button>
+      </div>
+      <div class="input-group">
+        <div class="field"><label>Width (mm)</label><input type="number" id="secWidth" value="600" min="50" step="10"></div>
+        <div class="field"><label>Depth (mm)</label><input type="number" id="secDepth" value="600" min="50" step="10"></div>
+      </div>
+      <div class="input-group">
+        <div class="field"><label>Cover (mm)</label><input type="number" id="cover" value="40" min="10" step="5"></div>
+      </div>
+    </div>
+
+    <div class="controls-scroll">
+      <!-- COLUMN -->
+      <div id="colPanel">
+        <div class="section-label">Column Reinforcing</div>
+        <div class="input-group">
+          <div class="field"><label>Bar Size</label>
+            <select id="colBar"><option value="12">N12</option><option value="16" selected>N16</option><option value="20">N20</option><option value="24">N24</option><option value="28">N28</option><option value="32">N32</option><option value="36">N36</option><option value="40">N40</option></select>
+          </div>
+          <div class="field"><label>Ligature Size</label>
+            <select id="ligSize"><option value="10" selected>R10</option><option value="12">N12</option><option value="16">N16</option></select>
+          </div>
+        </div>
+        <div class="input-group" style="margin-top:8px">
+          <div class="field"><label>Bars Top</label><input type="number" id="barsTop" value="3" min="2" step="1"></div>
+          <div class="field"><label>Bars Bottom</label><input type="number" id="barsBot" value="3" min="2" step="1"></div>
+        </div>
+        <div class="input-group" style="margin-top:8px">
+          <div class="field"><label>Bars Left (intermed.)</label><input type="number" id="barsLeft" value="2" min="0" step="1"></div>
+          <div class="field"><label>Bars Right (intermed.)</label><input type="number" id="barsRight" value="2" min="0" step="1"></div>
+        </div>
+        <div class="input-group" style="margin-top:8px">
+          <div class="field"><label>Corner Chamfer (mm)</label><input type="number" id="chamfer" value="20" min="0" step="5"></div>
+        </div>
+      </div>
+
+      <!-- SLAB -->
+      <div id="slabPanel" style="display:none">
+        <div class="section-label">Slab / Wall Reinforcing</div>
+        <div class="input-group">
+          <div class="field"><label>Longitudinal Bar</label>
+            <select id="slabLong"><option value="12">N12</option><option value="16" selected>N16</option><option value="20">N20</option><option value="24">N24</option><option value="28">N28</option><option value="32">N32</option></select>
+          </div>
+          <div class="field"><label>Long. Spacing (mm)</label><input type="number" id="slabLongSp" value="200" min="50" step="25"></div>
+        </div>
+        <div class="input-group" style="margin-top:8px">
+          <div class="field"><label>Transverse Bar</label>
+            <select id="slabTrans"><option value="12" selected>N12</option><option value="16">N16</option><option value="20">N20</option><option value="24">N24</option><option value="28">N28</option><option value="32">N32</option></select>
+          </div>
+          <div class="field"><label>Trans. Spacing (mm)</label><input type="number" id="slabTransSp" value="200" min="50" step="25"></div>
+        </div>
+        <div class="divider" style="margin:8px 0"></div>
+        <div class="section-label">Layer Config</div>
+        <div class="segmented" id="layerSeg">
+          <button class="active" data-val="dual">Dual (each face)</button>
+          <button data-val="single">Single Central</button>
+        </div>
+        <div id="orderWrap" style="margin-top:6px">
+          <div class="section-label">Bar Order (outermost first)</div>
+          <div class="segmented" id="orderSeg">
+            <button class="active" data-val="trans_out">Trans. Outside</button>
+            <button data-val="long_out">Long. Outside</button>
+          </div>
+        </div>
+        <div class="divider" style="margin:8px 0"></div>
+
+        <!-- DUAL end treatments -->
+        <div id="endsDual">
+          <div class="section-label">Bottom Bar Ends</div>
+          <div class="input-group">
+            <div class="field"><label>Left End</label>
+              <select id="endBotL"><option value="none" selected>Straight</option><option value="cog90">90° Cog</option><option value="hook180">180° Hook</option></select>
+            </div>
+            <div class="field"><label>Right End</label>
+              <select id="endBotR"><option value="none" selected>Straight</option><option value="cog90">90° Cog</option><option value="hook180">180° Hook</option></select>
+            </div>
+          </div>
+          <div class="section-label" style="margin-top:6px">Top Bar Ends</div>
+          <div class="input-group">
+            <div class="field"><label>Left End</label>
+              <select id="endTopL"><option value="none" selected>Straight</option><option value="cog90">90° Cog</option><option value="hook180">180° Hook</option></select>
+            </div>
+            <div class="field"><label>Right End</label>
+              <select id="endTopR"><option value="none" selected>Straight</option><option value="cog90">90° Cog</option><option value="hook180">180° Hook</option></select>
+            </div>
+          </div>
+        </div>
+
+        <!-- SINGLE end treatments -->
+        <div id="endsSingle" style="display:none">
+          <div class="section-label">Bar Ends</div>
+          <div class="input-group">
+            <div class="field"><label>Left End</label>
+              <select id="endMidL"><option value="none" selected>Straight</option><option value="cog90">90° Cog</option><option value="hook180">180° Hook</option></select>
+            </div>
+            <div class="field"><label>Right End</label>
+              <select id="endMidR"><option value="none" selected>Straight</option><option value="cog90">90° Cog</option><option value="hook180">180° Hook</option></select>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="controls-footer">
+      <button class="export-btn" id="exportBtn">EXPORT DXF</button>
+    </div>
+  </div>
+
+  <div class="canvas-area">
+    <svg id="preview"></svg>
+    <div class="canvas-info" id="canvasInfo"></div>
+  </div>
+</div>
+
+<script>
+// ================================================================
+//  SDXF LIBRARY (embedded)
+// ================================================================
+const NL=String.fromCharCode(10);
+function _point(x,index=0){return x.map((v,i)=>`${(i+1)*10+index}${NL}${v}`).join(NL);}
+function _points(p){return p.map((pt,i)=>_point(pt,i));}
+class Entity{
+  constructor({color=256,extrusion=null,layer='0',lineType=null,lineTypeScale=null,lineWeight=null,thickness=null,parent=null}={}){
+    this.color=color;this.extrusion=extrusion;this.layer=layer;this.lineType=lineType;this.lineTypeScale=lineTypeScale;this.lineWeight=lineWeight;this.thickness=thickness;this.parent=parent;
+  }
+  _common(){const p=this.parent||this;const l=['5','1','8',p.layer];if(p.extrusion!==null)l.push(_point(p.extrusion,200));if(p.lineType!==null)l.push('6',p.lineType);if(p.lineWeight!==null)l.push('370',p.lineWeight);if(p.lineTypeScale!==null)l.push('48',p.lineTypeScale);if(p.thickness!==null)l.push('39',p.thickness);if(p.color!==null)l.push('62',p.color);return l.join(NL);}
+}
+class Collection{constructor(e=[]){this.entities=[...e];}append(e){this.entities.push(e);}toString(){return this.entities.map(e=>e.toString()).join(NL);}}
+class Layer_{constructor({name='pydxf',color=7,lineType='continuous',flag=64}={}){this.name=name.toUpperCase();this.color=color;this.lineType=lineType;this.flag=flag;}toString(){return['0','LAYER','2',this.name,'70',this.flag,'62',this.color,'6',this.lineType].join(NL);}}
+class LineType_{constructor({name='continuous',description='Solid line',elements=[],flag=64}={}){this.name=name.toUpperCase();this.description=description;this.elements=[...elements];this.flag=flag;}toString(){return['0','LTYPE','2',this.name,'70',this.flag,'3',this.description,'72','65','73',this.elements.length,'40','0.0'].join(NL);}}
+class Style_{constructor({name='standard',flag=0,height=0,widthFactor=40,obliqueAngle=50,mirror=0,lastHeight=1,font='arial.ttf',bigFont=''}={}){this.name=name.toUpperCase();this.flag=flag;this.height=height;this.widthFactor=widthFactor;this.obliqueAngle=obliqueAngle;this.mirror=mirror;this.lastHeight=lastHeight;this.font=font.toUpperCase();this.bigFont=bigFont.toUpperCase();}toString(){return['0','STYLE','2',this.name,'70',this.flag,'40',this.flag,'41',this.widthFactor,'50',this.obliqueAngle,'71',this.mirror,'42',this.lastHeight,'3',this.font,'4',this.bigFont].join(NL);}}
+class PolyLine_ extends Entity{
+  constructor(points,{flag=0,width=null,elevation=null,closed=0,...co}={}){super(co);this.points=points;this.flag=flag;this.width=width;this.elevation=elevation;this.closed=closed;}
+  toString(){const l=['0','POLYLINE',this._common()];if(this.elevation!==null)l.push('66','1','10','0','20','0','30',this.elevation);else l.push('66','1','10','0','20','0','30','0');if(this.closed)l.push('70','1');if(this.width!==null)l.push('40',this.width,'41',this.width);for(let p of this.points)l.push('0','VERTEX','5','2',_point(p),'8','0');l.push('0','SEQEND');return l.join(NL);}
+}
+class Circle_ extends Entity{constructor(center=[0,0,0],radius=1,co={}){super(co);this.center=center;this.radius=radius;}toString(){return['0','CIRCLE',this._common(),_point(this.center),'40',this.radius].join(NL);}}
+class Drawing_ extends Collection{
+  constructor({insbase=[0,0,0],extmin=[0,0],extmax=[0,0],layers=[new Layer_()],linetypes=[new LineType_()],styles=[new Style_()],views=[],blocks=[],entities=[]}={}){super(entities);this.insbase=insbase;this.extmin=extmin;this.extmax=extmax;this.layers=[...layers];this.linetypes=[...linetypes];this.styles=[...styles];this.views=[...views];this.blocks=[...blocks];this._acadver=['9','$ACADVER','1','AC1006'].join(NL);this._HP=['insbase','extmin','extmax'];}
+  _name(x){return['9',`$${x.toUpperCase()}`].join(NL);}
+  _dp(n,x){return[this._name(n),_point(x)].join(NL);}
+  _section(n,items){const x=items&&items.length>0?NL+items.join(NL):'';return['0','SECTION','2',n.toUpperCase()+x,'0','ENDSEC'].join(NL);}
+  _table(n,items){const x=items&&items.length>0?NL+items.join(NL):'';return['0','TABLE','2',n.toUpperCase(),'70',items.length.toString()+x,'0','ENDTAB'].join(NL);}
+  toString(){const hi=[this._acadver];for(const a of this._HP)hi.push(this._dp(a,this[a]));const h=this._section('header',hi);const t=this._section('tables',[this._table('ltype',this.linetypes.map(x=>x.toString())),this._table('layer',this.layers.map(x=>x.toString())),this._table('style',this.styles.map(x=>x.toString())),this._table('view',this.views.map(x=>x.toString()))]);const b=this._section('blocks',this.blocks.map(x=>x.toString()));const e=this._section('entities',this.entities.map(x=>x.toString()));return[h,t,b,e,'0','EOF',''].join(NL);}
+}
+
+// ================================================================
+//  HOOK / COG DIMENSIONS per AS 3600 Cl 13.1.2.7 / REODATA p31
+//  pin = 5db for D500N. cog90 = overall 'c' dim. hook180 = 'a' dim.
+// ================================================================
+const HOOK_COG={
+  10:{hook180:105,cog90:155,pin:5},12:{hook180:115,cog90:170,pin:5},
+  16:{hook180:130,cog90:205,pin:5},20:{hook180:150,cog90:245,pin:5},
+  24:{hook180:180,cog90:295,pin:5},28:{hook180:210,cog90:345,pin:5},
+  32:{hook180:240,cog90:395,pin:5},36:{hook180:270,cog90:440,pin:5},
+  40:{hook180:300,cog90:490,pin:5}
+};
+
+// ================================================================
+//  APP STATE
+// ================================================================
+const $=id=>document.getElementById(id);
+let mode='column',layerCfg='dual',barOrder='trans_out';
+
+function seg(id,cb){const el=$(id);el.querySelectorAll('button').forEach(btn=>{btn.addEventListener('click',()=>{el.querySelectorAll('button').forEach(b=>b.classList.remove('active'));btn.classList.add('active');cb(btn.dataset.val);redraw();});});}
+seg('modeSeg',v=>{mode=v;$('colPanel').style.display=v==='column'?'block':'none';$('slabPanel').style.display=v==='slab'?'block':'none';});
+seg('layerSeg',v=>{
+  layerCfg=v;
+  $('orderWrap').style.display=v==='dual'?'block':'none';
+  $('endsDual').style.display=v==='dual'?'block':'none';
+  $('endsSingle').style.display=v==='single'?'block':'none';
+});
+seg('orderSeg',v=>{barOrder=v;});
+document.querySelectorAll('input,select').forEach(el=>{el.addEventListener('input',redraw);el.addEventListener('change',redraw);});
+
+// ================================================================
+//  GEOMETRY
+// ================================================================
+function gp(){return{W:+$('secWidth').value,D:+$('secDepth').value,cover:+$('cover').value};}
+
+// --- Bend geometry helpers ---
+function bendR(db){const hc=HOOK_COG[db]||HOOK_COG[16];return hc.pin*db/2;}
+
+// For a cog/hook at a bar end, the bend occupies space sideways from the
+// bar end. The outermost point of the bend (outside of bar centreline)
+// must maintain cover to the concrete face.
+// 90° cog: bend radius + db/2 clearance needed from the bar end inward
+// The bar x1/x2 must shift in by (bendR + db/2) - (bendR) = db/2 extra
+// beyond the cover line... but actually the issue is the bend arc
+// swings outward from the bar centreline toward the near face.
+//
+// Cover is measured to the OUTSIDE of the bar. For a straight bar at
+// y = cover + db/2, the outside face is at y - db/2 = cover. Good.
+// For a cog bending downward (bottom bar, inward), the lowest point of
+// the bend outside is at y - bendR - db/2. For this to equal cover:
+//   y = cover + bendR + db/2
+// So the bar centreline must shift inward by (bendR) relative to the
+// straight bar position of cover + db/2.
+//
+// For a 180° hook bending inward, the outermost point is also at
+// y - bendR - db/2. Same shift.
+//
+// For the horizontal extent: a cog at the left end has its arc centre
+// at (x + bendR, y). The leftmost point of the outside of the arc is
+// at x + bendR - bendR - db/2 = x - db/2. For this to be at cover:
+//   x = cover + db/2 (same as straight). OK no extra shift needed
+//   because the bar already starts at cover from the face.
+// Actually: the bar polyline starts at x1, and the cog arc extends
+// further LEFT than x1 by the bend radius. The arc centre is at
+// (x1 + bendR, y), arc starts at (x1, y) and swings to (x1+bendR,
+// y±bendR). The outside of the bend at the start is at x1 - db/2.
+// For cover: x1 - db/2 >= cover  →  x1 >= cover + db/2.
+// That's the same as a straight bar. But the ARC ITSELF goes from
+// x1 to x1+bendR. At the very start it's at x1 which for the bar
+// outside = x1 - db/2. So x1 = cover + db/2 is correct.
+//
+// So: for cog/hook, the bar Y shifts inward by bendR, and the bar
+// X stays at cover + db/2 (but we draw from x=cover for a wide pline
+// of width=db, so the centreline is already at cover, and the outside
+// of the wide polyline extends to cover - db/2... that's wrong).
+//
+// With a WIDE polyline of width=db, the centreline IS at y, and the
+// outside face is at y - db/2. So for the straight bar drawn as a
+// wide polyline at y = cover + transD/2, the outside = cover. Good.
+//
+// For the cog bend: the arc is drawn as a separate wide polyline.
+// The arc centreline radius is bendR. The outside of the wide pline
+// at the tightest point of the bend = arc_centre - bendR - db/2
+// from the near face. For this to maintain cover from y=0 (bottom face):
+//   y_bar - (nothing, the bend goes inward i.e. upward for bottom bars)
+// Wait: bottom bars bend INWARD = upward into the section. The cog
+// does NOT swing toward the bottom face. So no cover issue on that side.
+//
+// The issue is at the LEFT and RIGHT ends where the cog/hook bends.
+// For a left-end cog on a bottom bar: the arc curves from horizontal
+// to vertical (upward). The arc goes INWARD (rightward from left end,
+// upward). There's no encroachment toward the left face beyond x1.
+// OK so actually the straight bar cover is fine for the ends.
+//
+// But for a 180° hook at the left end: the hook swings a full
+// semicircle inward then the tail comes back. The extreme left point
+// is x1 (the bar end). The hook goes rightward and upward, not left.
+// So again no encroachment past x1.
+//
+// WHERE the cover issue arises: if the cog/hook bends TOWARD a face
+// (not away from it). For a bottom bar cog that bends UPWARD, the
+// bend goes away from the bottom face — no issue. But the TAIL of
+// the cog extends upward and may collide with the perpendicular bars.
+//
+// The REAL geometric issue is:
+// 1. For dual layer bottom bars with trans_out: the transverse bar is
+//    at y = cover + transD/2. A cog bends upward. Fine.
+//    But on a top bar (y = D - cover - transD/2), a cog bends downward
+//    (inward). Also fine — away from top face.
+//
+// 2. The perpendicular (circle) bars need to be pushed in from the
+//    ends where cogs/hooks exist, because the cog tail extends inward
+//    along x. A cog tail at the left end extends from x1 to about
+//    x1 + bendR (the arc) + some. The circle bars should start after
+//    the cog/hook zone.
+//
+// Let me just implement the practical fixes:
+// - Bar Y: keep as-is (cover + db/2 for outermost), the bends go inward
+// - Bar X: keep x1=cover, x2=W-cover for the main bar
+// - Cog/hook starts at x1 or x2 and curves inward — no cover violation
+// - Circle bars: push x1 in by cog/hook encroachment at left end,
+//   push x2 in by cog/hook encroachment at right end
+// - For single layer: the bar is at mid-depth. Cog direction is
+//   configurable but we'll default upward.
+
+function cogEncroachment(db){
+  // How far the cog/hook extends horizontally inward from the bar end
+  // 90° cog: the arc radius extends inward, plus there's no further
+  // horizontal extent (tail goes vertical). So encroachment = bendR.
+  return bendR(db);
+}
+
+function hookEncroachment(db){
+  // 180° hook: the arc diameter extends inward, then the tail extends
+  // further inward. Encroachment = 2*bendR + tailLen.
+  // But actually the hook at the left end: arc centre at (x, y+dir*r),
+  // arc swings from (x, y) to (x, y+dir*2r). The rightmost point of
+  // the arc is at x+r. Then tail goes from (x, y+dir*2r) rightward
+  // by tailLen. So horizontal encroachment = max(r, tailLen).
+  // Actually looking at the geometry: the 180° hook semicircle has its
+  // rightmost point at x + r (the arc centre x + r). Then the tail
+  // extends from x to x + tailLen. So encroachment = tailLen (since
+  // tailLen = max(4db, 70) which is typically > r = 2.5db).
+  const r=bendR(db);
+  const tail=Math.max(4*db,70);
+  return Math.max(r, tail);
+}
+
+function getEncroachment(endType, db){
+  if(endType==='cog90') return cogEncroachment(db);
+  if(endType==='hook180') return hookEncroachment(db);
+  return 0;
+}
+
+function colGeom(){
+  const{W,D,cover}=gp();
+  const barD=+$('colBar').value,ligD=+$('ligSize').value;
+  const nT=+$('barsTop').value,nB=+$('barsBot').value;
+  const nL=+$('barsLeft').value,nR=+$('barsRight').value;
+  const chamfer=+$('chamfer').value||0;
+  const ligOff=cover+ligD/2;
+  const barIn=cover+ligD+barD/2;
+  const lx=ligOff,rx=W-ligOff,by=ligOff,ty=D-ligOff;
+  const ligR=Math.min(4*ligD,(rx-lx)/2,(ty-by)/2);
+
+  const barFromLig=ligD/2+barD/2;
+  const cBarR=ligR-barFromLig;
+  const midAngles=[225,315,45,135];
+  const arcC=[{cx:lx+ligR,cy:by+ligR},{cx:rx-ligR,cy:by+ligR},{cx:rx-ligR,cy:ty-ligR},{cx:lx+ligR,cy:ty-ligR}];
+
+  const cornerBars=arcC.map((a,i)=>{
+    const ang=midAngles[i]*Math.PI/180;
+    return{x:a.cx+cBarR*Math.cos(ang),y:a.cy+cBarR*Math.sin(ang),isCorner:true};
+  });
+
+  const bars=[...cornerBars];
+  if(nT>2){const topY=D-barIn;const x1=cornerBars[3].x,x2=cornerBars[2].x;const sp=(x2-x1)/(nT-2+1);for(let i=1;i<=nT-2;i++)bars.push({x:x1+i*sp,y:topY});}
+  if(nB>2){const botY=barIn;const x1=cornerBars[0].x,x2=cornerBars[1].x;const sp=(x2-x1)/(nB-2+1);for(let i=1;i<=nB-2;i++)bars.push({x:x1+i*sp,y:botY});}
+  if(nL>0){const leftX=barIn;const y1=cornerBars[0].y,y2=cornerBars[3].y;const sp=(y2-y1)/(nL+1);for(let i=1;i<=nL;i++)bars.push({x:leftX,y:y1+i*sp});}
+  if(nR>0){const rightX=W-barIn;const y1=cornerBars[1].y,y2=cornerBars[2].y;const sp=(y2-y1)/(nR+1);for(let i=1;i<=nR;i++)bars.push({x:rightX,y:y1+i*sp});}
+
+  return{bars,barD,ligD,ligOff,ligR,lx,rx,by,ty,W,D,cover,chamfer};
+}
+
+function slabGeom(){
+  const{W,D,cover}=gp();
+  const longD=+$('slabLong').value,longSp=+$('slabLongSp').value;
+  const transD=+$('slabTrans').value,transSp=+$('slabTransSp').value;
+  const dual=layerCfg==='dual',tOut=barOrder==='trans_out';
+
+  // Read end treatments based on layer mode
+  let endBotL,endBotR,endTopL,endTopR;
+  if(dual){
+    endBotL=$('endBotL').value;endBotR=$('endBotR').value;
+    endTopL=$('endTopL').value;endTopR=$('endTopR').value;
+  } else {
+    endBotL=endTopL=$('endMidL').value;
+    endBotR=endTopR=$('endMidR').value;
+  }
+
+  const lineLayers=[],circLayers=[];
+  if(dual){
+    if(tOut){
+      lineLayers.push({y:cover+transD/2,dia:transD,face:'bot'});
+      circLayers.push({y:cover+transD+longD/2,dia:longD,sp:longSp});
+      lineLayers.push({y:D-cover-transD/2,dia:transD,face:'top'});
+      circLayers.push({y:D-cover-transD-longD/2,dia:longD,sp:longSp});
+    } else {
+      lineLayers.push({y:cover+longD+transD/2,dia:transD,face:'bot'});
+      circLayers.push({y:cover+longD/2,dia:longD,sp:longSp});
+      lineLayers.push({y:D-cover-longD-transD/2,dia:transD,face:'top'});
+      circLayers.push({y:D-cover-longD/2,dia:longD,sp:longSp});
+    }
+  } else {
+    // Single central: both directions at mid-depth
+    // Transverse slightly below centre, longitudinal slightly above
+    lineLayers.push({y:D/2-transD/2,dia:transD,face:'mid'});
+    circLayers.push({y:D/2+longD/2,dia:longD,sp:longSp});
+  }
+
+  const lines=lineLayers.map(l=>{
+    let eL='none',eR='none';
+    if(l.face==='bot'){eL=endBotL;eR=endBotR;}
+    else if(l.face==='top'){eL=endTopL;eR=endTopR;}
+    else if(l.face==='mid'){eL=$('endMidL').value;eR=$('endMidR').value;}
+    // Wide polyline centreline must be db/2 inside the cover line
+    // so the outside face of the polyline sits at the cover distance.
+    // When a cog/hook is present, shorten the main bar by the bend radius
+    // so it meets the start of the arc without overlap.
+    const baseL=cover+l.dia/2;
+    const baseR=W-cover-l.dia/2;
+    const trimL=(eL!=='none')?bendR(l.dia):0;
+    const trimR=(eR!=='none')?bendR(l.dia):0;
+    // cogX: passed to makeCogPts as the vertical leg x position.
+    // The function places arc centre at cogX, arc starts at cogX+r (left) or cogX-r (right).
+    // For the arc to start at the bar end (x1/x2), and the leg at baseL/baseR:
+    // cogX = baseL for left, cogX = baseR for right.
+    return{y:l.y,dia:l.dia,x1:baseL+trimL,x2:baseR-trimR,endLeft:eL,endRight:eR,face:l.face,
+           cogX1:baseL,cogX2:baseR};
+  });
+
+  // Compute max encroachment at left and right from all line layers
+  let encrL=0, encrR=0;
+  lines.forEach(l=>{
+    encrL=Math.max(encrL,getEncroachment(l.endLeft,l.dia));
+    encrR=Math.max(encrR,getEncroachment(l.endRight,l.dia));
+  });
+
+  // Circle bars pushed in past cog/hook zones
+  const circles=[];
+  circLayers.forEach(cl=>{
+    const baseL=cover+cl.dia/2;
+    const baseR=W-cover-cl.dia/2;
+    const x1=Math.max(baseL, cover+encrL+cl.dia/2);
+    const x2=Math.min(baseR, W-cover-encrR-cl.dia/2);
+    if(x2<=x1){
+      // Section too narrow, just put one bar at centre
+      circles.push({x:W/2,y:cl.y,dia:cl.dia});
+    } else {
+      const span=x2-x1;
+      const n=Math.max(1,Math.floor(span/cl.sp)+1);
+      const actSp=n>1?span/(n-1):0;
+      for(let i=0;i<n;i++) circles.push({x:x1+i*actSp,y:cl.y,dia:cl.dia});
+    }
+  });
+
+  return{lines,circles,longD,transD,W,D,cover};
+}
+
+// ================================================================
+//  ARC POINT HELPER
+// ================================================================
+function arcPts(cx,cy,r,startDeg,endDeg,n=8){
+  const pts=[];const s=startDeg*Math.PI/180,e=endDeg*Math.PI/180;
+  for(let i=0;i<=n;i++){const a=s+(e-s)*(i/n);pts.push([cx+r*Math.cos(a),cy+r*Math.sin(a)]);}
+  return pts;
+}
+
+// ================================================================
+//  D3 PREVIEW
+// ================================================================
+function redraw(){
+  const{W,D,cover}=gp();
+  $('canvasInfo').textContent=`${W} × ${D} mm`;
+  const svg=d3.select('#preview');svg.selectAll('*').remove();
+  const ct=svg.node().parentElement;
+  const cw=ct.clientWidth,ch=ct.clientHeight,m=60;
+  const sc=Math.min((cw-2*m)/W,(ch-2*m)/D);
+  const ox=(cw-W*sc)/2,oy=(ch-D*sc)/2;
+  const g=svg.append('g').attr('transform',`translate(${ox},${oy+D*sc}) scale(${sc},${-sc})`);
+  for(let x=0;x<=W;x+=50)for(let y=0;y<=D;y+=50)
+    g.append('circle').attr('cx',x).attr('cy',y).attr('r',.8/sc).attr('fill','#ffffff0a');
+  if(mode==='column')drawColPrev(g,sc);else drawSlabPrev(g,sc);
+}
+
+function drawConcreteOutline(g,sc,W,D,cover,chamfer){
+  if(chamfer>0){
+    g.append('path').attr('d',chamferRectPath(0,0,W,D,chamfer))
+      .attr('fill','#4caf5008').attr('stroke','#4caf50').style('stroke-width',2/sc);
+  }else{
+    g.append('rect').attr('x',0).attr('y',0).attr('width',W).attr('height',D)
+      .attr('fill','#4caf5008').attr('stroke','#4caf50').style('stroke-width',2/sc);
+  }
+  g.append('rect').attr('x',cover).attr('y',cover).attr('width',W-2*cover).attr('height',D-2*cover)
+    .attr('fill','none').attr('stroke','#4caf5033').style('stroke-width',1/sc)
+    .attr('stroke-dasharray',`${6/sc},${4/sc}`);
+}
+
+function drawColPrev(g,sc){
+  const c=colGeom();
+  drawConcreteOutline(g,sc,c.W,c.D,c.cover,c.chamfer);
+  g.append('path').attr('d',roundedRectPath(c.lx,c.by,c.rx,c.ty,c.ligR))
+    .attr('fill','none').attr('stroke','#f44336').style('stroke-width',c.ligD).attr('stroke-linejoin','round');
+  c.bars.forEach(b=>{
+    g.append('circle').attr('cx',b.x).attr('cy',b.y).attr('r',c.barD/2)
+      .attr('fill','#f44336').attr('stroke','#c62828').style('stroke-width',.5/sc);
+  });
+}
+
+function drawSlabPrev(g,sc){
+  const s=slabGeom();
+  drawConcreteOutline(g,sc,s.W,s.D,s.cover,0);
+  s.lines.forEach(l=>{
+    const db=l.dia,hc=HOOK_COG[db]||HOOK_COG[16],r=bendR(db);
+    const dir=(l.face==='top')?-1:1;
+    // Main bar uses trimmed x1/x2
+    g.append('line').attr('x1',l.x1).attr('y1',l.y).attr('x2',l.x2).attr('y2',l.y)
+      .attr('stroke','#f44336').style('stroke-width',db).attr('stroke-linecap','butt');
+    // Cogs use base cover position so vertical leg sits at cover + db/2
+    // Hooks use trimmed bar end so the semicircle starts at the bar end
+    const cogLx=l.endLeft==='cog90'?l.cogX1:l.x1;
+    const cogRx=l.endRight==='cog90'?l.cogX2:l.x2;
+    drawBarEndPrev(g,cogLx,l.y,db,r,hc,dir,'left',l.endLeft,sc);
+    drawBarEndPrev(g,cogRx,l.y,db,r,hc,dir,'right',l.endRight,sc);
+  });
+  s.circles.forEach(c=>{
+    g.append('circle').attr('cx',c.x).attr('cy',c.y).attr('r',c.dia/2)
+      .attr('fill','#f44336').attr('stroke','#c62828').style('stroke-width',.5/sc);
+  });
+}
+
+function drawBarEndPrev(g,x,y,db,r,hc,dir,side,endType,sc){
+  if(endType==='cog90'){
+    // x = vertical leg position (cover + db/2)
+    // Draw arc and tail as separate elements
+    // Arc centre at inside corner: (x+r, y+dir*r) for left, (x-r, y+dir*r) for right
+    const cogTail=Math.max(0,hc.cog90-r);
+    if(side==='left'){
+      // Centre at (x+r, y+dir*r). Bar end at (x+r, y) = 270° if dir=+1, 90° if dir=-1.
+      // Leg top at (x, y+dir*r) = 180°.
+      const cx_=x+r, cy_=y+dir*r;
+      const sA=dir>0?270:90;
+      const p=svgArcPath(cx_,cy_,r,sA,180);
+      g.append('path').attr('d',`M${x+r},${y} `+p).attr('fill','none').attr('stroke','#f44336').style('stroke-width',db);
+      // Vertical tail from leg top downward/upward
+      g.append('line').attr('x1',x).attr('y1',y+dir*r).attr('x2',x).attr('y2',y+dir*(r+cogTail))
+        .attr('stroke','#f44336').style('stroke-width',db);
+    }else{
+      // Centre at (x-r, y+dir*r). Bar end at (x-r, y) = 270° if dir=+1, 90° if dir=-1.
+      // Leg top at (x, y+dir*r) = 0° (or 360° for short sweep when dir=+1).
+      const cx_=x-r, cy_=y+dir*r;
+      const sA=dir>0?270:90;
+      const eA=dir>0?360:0;
+      const p=svgArcPath(cx_,cy_,r,sA,eA);
+      g.append('path').attr('d',`M${x-r},${y} `+p).attr('fill','none').attr('stroke','#f44336').style('stroke-width',db);
+      // Vertical tail
+      g.append('line').attr('x1',x).attr('y1',y+dir*r).attr('x2',x).attr('y2',y+dir*(r+cogTail))
+        .attr('stroke','#f44336').style('stroke-width',db);
+    }
+  }else if(endType==='hook180'){
+    const tail=Math.max(4*db,70);
+    if(side==='left'){
+      // Arc centre at (x, y+dir*r). Start at bottom/top of circle (bar end),
+      // sweep 180° inward. Start angle points back to bar: 270° for up, 90° for down.
+      const cx_=x,cy_=y+dir*r;
+      const sA=dir>0?270:90,eA=dir>0?90:270;
+      // Ensure we go the short 180° way: for dir>0: 270→180→90 (CCW, decreasing)
+      // For dir<0: 90→180→270 (CCW, increasing). Both are 180° sweeps.
+      const pts=arcPts(cx_,cy_,r,sA,eA,16);
+      let d='M'+pts.map(p=>p[0]+','+p[1]).join(' L');
+      const lp=pts[pts.length-1];d+=` L${lp[0]+tail},${lp[1]}`;
+      g.append('path').attr('d',d).attr('fill','none').attr('stroke','#f44336').style('stroke-width',db);
+    }else{
+      // Right end hook: arc centre at (x, y+dir*r)
+      // dir=+1: start 270°, sweep CW (increasing) to 450° (=90°+360)
+      // dir=-1: start 90°, sweep CW (decreasing) to -90° (=270°-360)
+      const cx_=x,cy_=y+dir*r;
+      const sA=dir>0?270:90,eA=dir>0?450:-90;
+      const pts=arcPts(cx_,cy_,r,sA,eA,16);
+      let d='M'+pts.map(p=>p[0]+','+p[1]).join(' L');
+      const lp=pts[pts.length-1];d+=` L${lp[0]-tail},${lp[1]}`;
+      g.append('path').attr('d',d).attr('fill','none').attr('stroke','#f44336').style('stroke-width',db);
+    }
+  }
+}
+
+function svgArcPath(cx,cy,r,startDeg,endDeg){
+  const pts=arcPts(cx,cy,r,startDeg,endDeg,12);
+  return pts.map((p,i)=>(i===0?'':'L')+p[0]+','+p[1]).join(' ');
+}
+
+function roundedRectPath(x1,y1,x2,y2,r){
+  return`M${x1+r},${y1} L${x2-r},${y1} A${r},${r} 0 0 1 ${x2},${y1+r} L${x2},${y2-r} A${r},${r} 0 0 1 ${x2-r},${y2} L${x1+r},${y2} A${r},${r} 0 0 1 ${x1},${y2-r} L${x1},${y1+r} A${r},${r} 0 0 1 ${x1+r},${y1} Z`;
+}
+
+function chamferRectPath(x1,y1,x2,y2,ch){
+  return`M${x1+ch},${y1} L${x2-ch},${y1} L${x2},${y1+ch} L${x2},${y2-ch} L${x2-ch},${y2} L${x1+ch},${y2} L${x1},${y2-ch} L${x1},${y1+ch} Z`;
+}
+
+// ================================================================
+//  DXF GENERATION HELPERS
+// ================================================================
+function roundedRectPts(x1,y1,x2,y2,r){
+  const pts=[],n=8;
+  pts.push([x1+r,y1]);pts.push([x2-r,y1]);
+  for(let i=1;i<=n;i++){const a=-Math.PI/2+(Math.PI/2)*(i/n);pts.push([x2-r+r*Math.cos(a),y1+r+r*Math.sin(a)]);}
+  pts.push([x2,y2-r]);
+  for(let i=1;i<=n;i++){const a=0+(Math.PI/2)*(i/n);pts.push([x2-r+r*Math.cos(a),y2-r+r*Math.sin(a)]);}
+  pts.push([x1+r,y2]);
+  for(let i=1;i<=n;i++){const a=Math.PI/2+(Math.PI/2)*(i/n);pts.push([x1+r+r*Math.cos(a),y2-r+r*Math.sin(a)]);}
+  pts.push([x1,y1+r]);
+  for(let i=1;i<=n;i++){const a=Math.PI+(Math.PI/2)*(i/n);pts.push([x1+r+r*Math.cos(a),y1+r+r*Math.sin(a)]);}
+  return pts;
+}
+
+function makeCogPts(x,y,db,side,face){
+  // x = vertical leg x position (at cover + db/2)
+  // Arc centre at inside corner of bend
+  const hc=HOOK_COG[db]||HOOK_COG[16];
+  const r=bendR(db);
+  const dir=(face==='top')?-1:1;
+  const cogTail=Math.max(0,hc.cog90-r);
+  // Returns {arc: [...points], tail: [...points]} for two separate polylines
+  if(side==='left'){
+    // Centre at (x+r, y+dir*r). Bar end at (x+r, y) → angle: dir>0?270:90. Leg top at (x, y+dir*r) → 180°.
+    const cx_=x+r, cy_=y+dir*r;
+    const sA=dir>0?270:90;
+    const arc=arcPts(cx_,cy_,r,sA,180,8);
+    const tail=[[x,y+dir*r],[x,y+dir*(r+cogTail)]];
+    return {arc,tail};
+  }else{
+    // Centre at (x-r, y+dir*r). Bar end at (x-r, y) → angle: dir>0?270:90.
+    // Leg top at (x, y+dir*r) → 0° (use 360 for dir>0 so sweep goes the short way).
+    const cx_=x-r, cy_=y+dir*r;
+    const sA=dir>0?270:90;
+    const eA=dir>0?360:0;
+    const arc=arcPts(cx_,cy_,r,sA,eA,8);
+    const tail=[[x,y+dir*r],[x,y+dir*(r+cogTail)]];
+    return {arc,tail};
+  }
+}
+
+function makeHookPts(x,y,db,side,face){
+  const r=bendR(db);
+  const dir=(face==='top')?-1:1;
+  const tail=Math.max(4*db,70);
+  const pts=[];
+  if(side==='left'){
+    // Arc centre at (x, y+dir*r).
+    // dir=+1: centre above, bar end at 270°, sweep to 90° (180° CCW through 180°)
+    // dir=-1: centre below, bar end at 90°, sweep to 270° (180° CCW through 180°)
+    const sA=dir>0?270:90, eA=dir>0?90:270;
+    const ap=arcPts(x,y+dir*r,r,sA,eA,16);
+    pts.push(...ap);const lp=ap[ap.length-1];pts.push([lp[0]+tail,lp[1]]);
+  }else{
+    // dir=+1: centre above, bar end at 270°, sweep CW to 450° (180° CW through 360°)
+    // dir=-1: centre below, bar end at 90°, sweep CW to 450° (=90+360)... 
+    //   actually: 90° → -90° is CW 180°. Use 90 → -90.
+    const sA=dir>0?270:90, eA=dir>0?450:-90;
+    const ap=arcPts(x,y+dir*r,r,sA,eA,16);
+    pts.push(...ap);const lp=ap[ap.length-1];pts.push([lp[0]-tail,lp[1]]);
+  }
+  return pts;
+}
+
+// ================================================================
+//  CONCRETE INFILL SYMBOLS
+// ================================================================
+function seededRandom(seed){return function(){seed|=0;seed=seed+0x6D2B79F5|0;let t=Math.imul(seed^seed>>>15,1|seed);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+
+function addConcreteSymbols(ents,W,D,cover){
+  const minS=Math.min(W,D)*0.018,maxS=Math.min(W,D)*0.04;
+  const margin=cover*0.6;
+  const rng=seededRandom(Math.round(W*1000+D*7+cover*31));
+  const lo={layer:'CONC_FILL',color:8};
+  const zones=[
+    {x1:W*0.5+margin,y1:margin,x2:W-margin,y2:D*0.5-margin},
+    {x1:margin,y1:D*0.5+margin,x2:W*0.5-margin,y2:D-margin}
+  ];
+  zones.forEach(z=>{
+    const zw=z.x2-z.x1,zh=z.y2-z.y1;if(zw<10||zh<10)return;
+    const count=Math.max(4,Math.round((zw*zh)/2500));
+    for(let i=0;i<count;i++){
+      const cx=z.x1+rng()*zw,cy=z.y1+rng()*zh;
+      const sz=minS+rng()*(maxS-minS);const kind=rng();
+      if(kind<0.4){
+        const ang=rng()*Math.PI*2;const pts=[];
+        for(let j=0;j<3;j++){const a=ang+j*Math.PI*2/3;pts.push([cx+sz*Math.cos(a),cy+sz*Math.sin(a),0]);}
+        ents.push(new PolyLine_(pts,{closed:1,...lo}));
+      }else if(kind<0.75){
+        ents.push(new Circle_([cx,cy,0],sz*0.5+rng()*sz*0.3,lo));
+      }else{
+        const pts=[];for(let j=0;j<4;j++){const a=rng()*Math.PI*2;const d=sz*(0.4+rng()*0.6);pts.push([cx+d*Math.cos(Math.PI/2*j+a*0.3),cy+d*Math.sin(Math.PI/2*j+a*0.3),0]);}
+        ents.push(new PolyLine_(pts,{closed:1,...lo}));
+      }
+    }
+  });
+}
+
+// ================================================================
+//  DXF EXPORT
+// ================================================================
+function makeDXF(){
+  const{W,D,cover}=gp();
+  const layers=[new Layer_({name:'CONCRETE',color:3}),new Layer_({name:'REO',color:1}),new Layer_({name:'CONC_FILL',color:8}),new Layer_()];
+  const ents=[];
+
+  if(mode==='column'){
+    const c=colGeom();
+    if(c.chamfer>0){const ch=c.chamfer;ents.push(new PolyLine_([[ch,0,0],[W-ch,0,0],[W,ch,0],[W,D-ch,0],[W-ch,D,0],[ch,D,0],[0,D-ch,0],[0,ch,0]],{closed:1,layer:'CONCRETE',color:3}));}
+    else{ents.push(new PolyLine_([[0,0,0],[W,0,0],[W,D,0],[0,D,0]],{closed:1,layer:'CONCRETE',color:3}));}
+    const lp=roundedRectPts(c.lx,c.by,c.rx,c.ty,c.ligR);
+    ents.push(new PolyLine_(lp.map(p=>[p[0],p[1],0]),{closed:1,width:c.ligD,layer:'REO',color:1}));
+    c.bars.forEach(b=>{
+      ents.push(new Circle_([b.x,b.y,0],c.barD/2,{layer:'REO',color:1}));
+      const pr=c.barD/4;
+      ents.push(new PolyLine_([[b.x-pr,b.y,0],[b.x+pr,b.y,0]],{closed:1,width:c.barD/2,layer:'REO',color:1}));
+    });
+  }else{
+    ents.push(new PolyLine_([[0,0,0],[W,0,0],[W,D,0],[0,D,0]],{closed:1,layer:'CONCRETE',color:3}));
+    const s=slabGeom();
+    s.lines.forEach(l=>{
+      // Main bar uses trimmed x1/x2 (shortened by bend radius where cog/hook present)
+      ents.push(new PolyLine_([[l.x1,l.y,0],[l.x2,l.y,0]],{width:l.dia,layer:'REO',color:1}));
+      // Cogs: arc + tail as separate polylines. Hooks: single polyline from bar end.
+      if(l.endLeft==='cog90'){
+        const c=makeCogPts(l.cogX1,l.y,l.dia,'left',l.face);
+        ents.push(new PolyLine_(c.arc.map(q=>[q[0],q[1],0]),{width:l.dia,layer:'REO',color:1}));
+        ents.push(new PolyLine_(c.tail.map(q=>[q[0],q[1],0]),{width:l.dia,layer:'REO',color:1}));
+      } else if(l.endLeft==='hook180'){const p=makeHookPts(l.x1,l.y,l.dia,'left',l.face);ents.push(new PolyLine_(p.map(q=>[q[0],q[1],0]),{width:l.dia,layer:'REO',color:1}));}
+      if(l.endRight==='cog90'){
+        const c=makeCogPts(l.cogX2,l.y,l.dia,'right',l.face);
+        ents.push(new PolyLine_(c.arc.map(q=>[q[0],q[1],0]),{width:l.dia,layer:'REO',color:1}));
+        ents.push(new PolyLine_(c.tail.map(q=>[q[0],q[1],0]),{width:l.dia,layer:'REO',color:1}));
+      } else if(l.endRight==='hook180'){const p=makeHookPts(l.x2,l.y,l.dia,'right',l.face);ents.push(new PolyLine_(p.map(q=>[q[0],q[1],0]),{width:l.dia,layer:'REO',color:1}));}
+    });
+    s.circles.forEach(c=>{
+      ents.push(new Circle_([c.x,c.y,0],c.dia/2,{layer:'REO',color:1}));
+      const pr=c.dia/4;
+      ents.push(new PolyLine_([[c.x-pr,c.y,0],[c.x+pr,c.y,0]],{closed:1,width:c.dia/2,layer:'REO',color:1}));
+    });
+  }
+
+  addConcreteSymbols(ents,W,D,cover);
+  return new Drawing_({layers,entities:ents,extmin:[-10,-10],extmax:[W+10,D+10]}).toString();
+}
+
+$('exportBtn').addEventListener('click',()=>{
+  try{
+    const dxf=makeDXF();const blob=new Blob([dxf],{type:'application/dxf'});
+    const a=document.createElement('a');a.href=URL.createObjectURL(blob);
+    a.download=`section_${mode}_${$('secWidth').value}x${$('secDepth').value}.dxf`;
+    a.click();URL.revokeObjectURL(a.href);
+  }catch(e){alert('Export error: '+e.message);console.error(e);}
+});
+
+window.addEventListener('resize',redraw);
+redraw();
+</script>
+</body>
+</html>
