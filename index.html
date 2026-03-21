@@ -182,8 +182,8 @@ class Layer_{constructor({name='pydxf',color=7,lineType='continuous',flag=64}={}
 class LineType_{constructor({name='continuous',description='Solid line',elements=[],flag=64}={}){this.name=name.toUpperCase();this.description=description;this.elements=[...elements];this.flag=flag;}toString(){return['0','LTYPE','2',this.name,'70',this.flag,'3',this.description,'72','65','73',this.elements.length,'40','0.0'].join(NL);}}
 class Style_{constructor({name='standard',flag=0,height=0,widthFactor=40,obliqueAngle=50,mirror=0,lastHeight=1,font='arial.ttf',bigFont=''}={}){this.name=name.toUpperCase();this.flag=flag;this.height=height;this.widthFactor=widthFactor;this.obliqueAngle=obliqueAngle;this.mirror=mirror;this.lastHeight=lastHeight;this.font=font.toUpperCase();this.bigFont=bigFont.toUpperCase();}toString(){return['0','STYLE','2',this.name,'70',this.flag,'40',this.flag,'41',this.widthFactor,'50',this.obliqueAngle,'71',this.mirror,'42',this.lastHeight,'3',this.font,'4',this.bigFont].join(NL);}}
 class PolyLine_ extends Entity{
-  constructor(points,{flag=0,width=null,elevation=null,closed=0,...co}={}){super(co);this.points=points;this.flag=flag;this.width=width;this.elevation=elevation;this.closed=closed;}
-  toString(){const l=['0','POLYLINE',this._common()];if(this.elevation!==null)l.push('66','1','10','0','20','0','30',this.elevation);else l.push('66','1','10','0','20','0','30','0');if(this.closed)l.push('70','1');if(this.width!==null)l.push('40',this.width,'41',this.width);for(let p of this.points)l.push('0','VERTEX','5','2',_point(p),'8','0');l.push('0','SEQEND');return l.join(NL);}
+  constructor(points,{flag=0,width=null,elevation=null,closed=0,bulge=null,...co}={}){super(co);this.points=points;this.flag=flag;this.width=width;this.elevation=elevation;this.closed=closed;this.bulge=bulge;}
+  toString(){const l=['0','POLYLINE',this._common()];if(this.elevation!==null)l.push('66','1','10','0','20','0','30',this.elevation);else l.push('66','1','10','0','20','0','30','0');if(this.closed)l.push('70','1');if(this.width!==null)l.push('40',this.width,'41',this.width);for(let p of this.points){l.push('0','VERTEX','5','2',_point(p),'8','0');if(this.bulge!==null)l.push('42',this.bulge);}l.push('0','SEQEND');return l.join(NL);}
 }
 class Circle_ extends Entity{constructor(center=[0,0,0],radius=1,co={}){super(co);this.center=center;this.radius=radius;}toString(){return['0','CIRCLE',this._common(),_point(this.center),'40',this.radius].join(NL);}}
 class Drawing_ extends Collection{
@@ -737,7 +737,7 @@ function makeDXF(){
     c.bars.forEach(b=>{
       ents.push(new Circle_([b.x,b.y,0],c.barD/2,{layer:'REO',color:1}));
       const pr=c.barD/4;
-      ents.push(new PolyLine_([[b.x-pr,b.y,0],[b.x+pr,b.y,0]],{closed:1,width:c.barD/2,layer:'REO',color:1}));
+      ents.push(new PolyLine_([[b.x-pr,b.y,0],[b.x+pr,b.y,0]],{closed:1,width:c.barD/2,bulge:-1,layer:'REO',color:1}));
     });
   }else{
     ents.push(new PolyLine_([[0,0,0],[W,0,0],[W,D,0],[0,D,0]],{closed:1,layer:'CONCRETE',color:3}));
@@ -760,7 +760,7 @@ function makeDXF(){
     s.circles.forEach(c=>{
       ents.push(new Circle_([c.x,c.y,0],c.dia/2,{layer:'REO',color:1}));
       const pr=c.dia/4;
-      ents.push(new PolyLine_([[c.x-pr,c.y,0],[c.x+pr,c.y,0]],{closed:1,width:c.dia/2,layer:'REO',color:1}));
+      ents.push(new PolyLine_([[c.x-pr,c.y,0],[c.x+pr,c.y,0]],{closed:1,width:c.dia/2,bulge:-1,layer:'REO',color:1}));
     });
   }
 
