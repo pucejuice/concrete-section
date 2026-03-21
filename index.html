@@ -100,7 +100,6 @@ body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;min
           <div class="field"><label>Transverse Bar</label>
             <select id="slabTrans"><option value="12" selected>N12</option><option value="16">N16</option><option value="20">N20</option><option value="24">N24</option><option value="28">N28</option><option value="32">N32</option></select>
           </div>
-          <div class="field"><label>Trans. Spacing (mm)</label><input type="number" id="slabTransSp" value="200" min="50" step="25"></div>
         </div>
         <div class="divider" style="margin:8px 0"></div>
         <div class="section-label">Layer Config</div>
@@ -223,7 +222,19 @@ seg('layerSeg',v=>{
   $('endsSingle').style.display=v==='single'?'block':'none';
 });
 seg('orderSeg',v=>{barOrder=v;});
-document.querySelectorAll('input,select').forEach(el=>{el.addEventListener('input',redraw);el.addEventListener('change',redraw);});
+// Debounced redraw for safe mid-edit handling
+let _redrawTimer=null;
+function debouncedRedraw(){clearTimeout(_redrawTimer);_redrawTimer=setTimeout(redraw,150);}
+
+// Number inputs: redraw on 'change' (after edit) + debounced on 'input' for live preview
+// Selects: immediate on 'change'
+document.querySelectorAll('input[type="number"]').forEach(el=>{
+  el.addEventListener('change',redraw);
+  el.addEventListener('input',debouncedRedraw);
+});
+document.querySelectorAll('select').forEach(el=>{
+  el.addEventListener('change',redraw);
+});
 
 // ================================================================
 //  GEOMETRY
@@ -382,7 +393,7 @@ function colGeom(){
 function slabGeom(){
   const{W,D,cover}=gp();
   const longD=+$('slabLong').value,longSp=+$('slabLongSp').value;
-  const transD=+$('slabTrans').value,transSp=+$('slabTransSp').value;
+  const transD=+$('slabTrans').value;
   const dual=layerCfg==='dual',tOut=barOrder==='trans_out';
 
   // Read end treatments based on layer mode
@@ -445,17 +456,17 @@ function slabGeom(){
 
   // Circle bars pushed in past cog/hook zones
   const circles=[];
+  const safeLongSp=Math.max(longSp, longD, 1); // never less than bar dia or 1mm
   circLayers.forEach(cl=>{
     const baseL=cover+cl.dia/2;
     const baseR=W-cover-cl.dia/2;
     const x1=Math.max(baseL, cover+encrL+cl.dia/2);
     const x2=Math.min(baseR, W-cover-encrR-cl.dia/2);
     if(x2<=x1){
-      // Section too narrow, just put one bar at centre
       circles.push({x:W/2,y:cl.y,dia:cl.dia});
     } else {
       const span=x2-x1;
-      const n=Math.max(1,Math.floor(span/cl.sp)+1);
+      const n=Math.max(1,Math.min(200,Math.floor(span/safeLongSp)+1));
       const actSp=n>1?span/(n-1):0;
       for(let i=0;i<n;i++) circles.push({x:x1+i*actSp,y:cl.y,dia:cl.dia});
     }
@@ -477,17 +488,22 @@ function arcPts(cx,cy,r,startDeg,endDeg,n=8){
 //  D3 PREVIEW
 // ================================================================
 function redraw(){
+  try{
   const{W,D,cover}=gp();
+  if(W<=0||D<=0||cover<0) return;
   $('canvasInfo').textContent=`${W} × ${D} mm`;
   const svg=d3.select('#preview');svg.selectAll('*').remove();
   const ct=svg.node().parentElement;
   const cw=ct.clientWidth,ch=ct.clientHeight,m=60;
+  if(cw<=0||ch<=0) return;
   const sc=Math.min((cw-2*m)/W,(ch-2*m)/D);
+  if(sc<=0||!isFinite(sc)) return;
   const ox=(cw-W*sc)/2,oy=(ch-D*sc)/2;
   const g=svg.append('g').attr('transform',`translate(${ox},${oy+D*sc}) scale(${sc},${-sc})`);
   for(let x=0;x<=W;x+=50)for(let y=0;y<=D;y+=50)
     g.append('circle').attr('cx',x).attr('cy',y).attr('r',.8/sc).attr('fill','#ffffff0a');
   if(mode==='column')drawColPrev(g,sc);else drawSlabPrev(g,sc);
+  }catch(e){console.warn('redraw:',e);}
 }
 
 function drawConcreteOutline(g,sc,W,D,cover,chamfer){
