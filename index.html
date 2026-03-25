@@ -153,8 +153,9 @@ body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;min
       </div>
     </div>
 
-    <div class="controls-footer">
-      <button class="export-btn" id="exportBtn">EXPORT DXF</button>
+    <div class="controls-footer" style="display:flex;gap:8px;">
+      <button class="export-btn" id="exportBtn" style="flex:1;">EXPORT DXF</button>
+      <button class="export-btn" id="copyBtn" style="flex:1;background:#363b4a;color:var(--text);">COPY TO CLIPBOARD</button>
     </div>
   </div>
 
@@ -775,6 +776,24 @@ $('exportBtn').addEventListener('click',()=>{
     a.download=`section_${mode}_${$('secWidth').value}x${$('secDepth').value}.dxf`;
     a.click();URL.revokeObjectURL(a.href);
   }catch(e){alert('Export error: '+e.message);console.error(e);}
+});
+
+$('copyBtn').addEventListener('click',()=>{
+  try{
+    const dxf=makeDXF();
+    navigator.clipboard.writeText(dxf).then(()=>{
+      const btn=$('copyBtn');
+      btn.textContent='COPIED!';btn.style.background='var(--accent)';btn.style.color='#111';
+      setTimeout(()=>{btn.textContent='COPY TO CLIPBOARD';btn.style.background='#363b4a';btn.style.color='';},1500);
+    }).catch(()=>{
+      // Fallback for older browsers / non-HTTPS
+      const ta=document.createElement('textarea');ta.value=dxf;ta.style.position='fixed';ta.style.opacity='0';
+      document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);
+      const btn=$('copyBtn');
+      btn.textContent='COPIED!';btn.style.background='var(--accent)';btn.style.color='#111';
+      setTimeout(()=>{btn.textContent='COPY TO CLIPBOARD';btn.style.background='#363b4a';btn.style.color='';},1500);
+    });
+  }catch(e){alert('Copy error: '+e.message);console.error(e);}
 });
 
 window.addEventListener('resize',redraw);
