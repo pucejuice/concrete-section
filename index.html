@@ -85,6 +85,20 @@ body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;min
         <div class="input-group" style="margin-top:8px">
           <div class="field"><label>Corner Chamfer (mm)</label><input type="number" id="chamfer" value="20" min="0" step="5"></div>
         </div>
+        <div class="divider" style="margin:8px 0"></div>
+        <div class="section-label">Side Elevations (DXF only)</div>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;padding:6px 0;">
+          <input type="checkbox" id="inclElev" style="width:auto;min-width:auto;accent-color:var(--accent);">
+          Include side elevations
+        </label>
+        <div class="input-group" style="margin-top:4px">
+          <div class="field"><label>Column Height (mm)</label><input type="number" id="colHeight" value="3000" min="500" step="100"></div>
+          <div class="field"><label>Lig Spacing (mm)</label><input type="number" id="ligSpacing" value="300" min="50" step="25"></div>
+        </div>
+        <div class="input-group" style="margin-top:4px">
+          <div class="field"><label>Starter Ext. (mm)</label><input type="number" id="starterLap" value="200" min="50" step="25"></div>
+          <div class="field"><label>Starter Offset (mm)</label><input type="number" id="starterOff" value="10" min="5" step="5"></div>
+        </div>
       </div>
 
       <!-- SLAB -->
@@ -149,6 +163,21 @@ body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;min
               <select id="endMidR"><option value="none" selected>Straight</option><option value="cog90">90° Cog</option><option value="hook180">180° Hook</option></select>
             </div>
           </div>
+        </div>
+
+        <div class="divider" style="margin:8px 0"></div>
+        <div class="section-label">Elevation (DXF only)</div>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;padding:6px 0;">
+          <input type="checkbox" id="inclSlabElev" style="width:auto;min-width:auto;accent-color:var(--accent);">
+          Include elevation
+        </label>
+        <div class="input-group" style="margin-top:4px">
+          <div class="field"><label>Wall/Slab Height (mm)</label><input type="number" id="slabHeight" value="3000" min="500" step="100"></div>
+          <div class="field"><label>Horiz. Bar Spacing (mm)</label><input type="number" id="slabHorizSp" value="200" min="50" step="25"></div>
+        </div>
+        <div class="input-group" style="margin-top:4px">
+          <div class="field"><label>Starter Ext. (mm)</label><input type="number" id="slabStarterExt" value="200" min="50" step="25"></div>
+          <div class="field"><label>Starter Offset (mm)</label><input type="number" id="slabStarterOff" value="10" min="5" step="5"></div>
         </div>
       </div>
     </div>
@@ -724,6 +753,396 @@ function addConcreteSymbols(ents,W,D,cover){
 // ================================================================
 //  DXF EXPORT
 // ================================================================
+// ================================================================
+//  COLUMN SIDE ELEVATIONS
+//  Draws 4 side views offset from the section.
+//  Front (bottom face looking up), Back (top face), Left, Right.
+// ================================================================
+function addColumnElevations(ents, c){
+  const{W,D,cover,barD,ligD,ligR}=c;
+  const barIn=cover+ligD+barD/2;
+  const H=+$('colHeight').value||3000;
+  const ligSp=Math.max(+$('ligSpacing').value||300, ligD+1);
+  const starterExt=+$('starterLap').value||200; // extension beyond column top/bottom
+  const starterOff=+$('starterOff').value||10;
+  const lap=40*barD; // development length = 40db
+  const hc=HOOK_COG[barD]||HOOK_COG[16];
+  const cogR=bendR(barD);
+  const cogTail=Math.max(0,hc.cog90-cogR);
+
+  const reo={layer:'REO',color:1};
+  const conc={layer:'CONCRETE',color:3};
+
+  // Gap between drawings
+  const gap=Math.max(W,D)*0.5+200;
+
+  const views = [
+    { label:'front', faceW:W, ox:0, oy:-(H+gap),
+      getBars:()=>{
+        const out=[];
+        out.push(c.bars[0].x, c.bars[1].x);
+        const nB=+$('barsBot').value;
+        if(nB>2){ for(let i=4;i<4+(nB-2);i++) if(c.bars[i]) out.push(c.bars[i].x); }
+        return [...new Set(out)].sort((a,b)=>a-b);
+      }
+    },
+    { label:'left', faceW:D, ox:-(D+gap), oy:-(H+gap),
+      getBars:()=>{
+        const out=[];
+        out.push(c.bars[0].y, c.bars[3].y);
+        const nB=+$('barsBot').value, nT=+$('barsTop').value;
+        const nL=+$('barsLeft').value;
+        const topStart=4+(nB>2?nB-2:0)+(nT>2?nT-2:0);
+        for(let i=topStart;i<topStart+nL;i++) if(c.bars[i]) out.push(c.bars[i].y);
+        return [...new Set(out)].sort((a,b)=>a-b);
+      }
+    }
+  ];
+
+  views.forEach(v=>{
+    const ox=v.ox, oy=v.oy;
+    const fw=v.faceW;
+
+    // Concrete outline
+    ents.push(new PolyLine_([[ox,oy,0],[ox+fw,oy,0],[ox+fw,oy+H,0],[ox,oy+H,0]],{closed:1,...conc}));
+
+    // Concrete hatch symbols offset to this view
+    const minS=Math.min(fw,H)*0.012, maxS=Math.min(fw,H)*0.025;
+    const margin_=cover*0.6;
+    const rng=seededRandom(Math.round(fw*1000+H*7+ox*31+oy*13));
+    const lo={layer:'CONC_FILL',color:8};
+    const hZones=[
+      {x1:ox+fw*0.5+margin_,y1:oy+margin_,x2:ox+fw-margin_,y2:oy+H*0.5-margin_},
+      {x1:ox+margin_,y1:oy+H*0.5+margin_,x2:ox+fw*0.5-margin_,y2:oy+H-margin_}
+    ];
+    hZones.forEach(z=>{
+      const zw=z.x2-z.x1,zh=z.y2-z.y1;if(zw<10||zh<10)return;
+      const count=Math.max(3,Math.round((zw*zh)/8000));
+      for(let i=0;i<count;i++){
+        const cx=z.x1+rng()*zw,cy=z.y1+rng()*zh;
+        const sz=minS+rng()*(maxS-minS);const kind=rng();
+        if(kind<0.4){
+          const ang=rng()*Math.PI*2;const pts=[];
+          for(let j=0;j<3;j++){const a=ang+j*Math.PI*2/3;pts.push([cx+sz*Math.cos(a),cy+sz*Math.sin(a),0]);}
+          ents.push(new PolyLine_(pts,{closed:1,...lo}));
+        }else if(kind<0.75){
+          ents.push(new Circle_([cx,cy,0],sz*0.5+rng()*sz*0.3,lo));
+        }else{
+          const pts=[];for(let j=0;j<4;j++){const a=rng()*Math.PI*2;const d=sz*(0.4+rng()*0.6);pts.push([cx+d*Math.cos(Math.PI/2*j+a*0.3),cy+d*Math.sin(Math.PI/2*j+a*0.3),0]);}
+          ents.push(new PolyLine_(pts,{closed:1,...lo}));
+        }
+      }
+    });
+
+    // Ligature positions: first at 50 + ligD/2 from bottom, then at ligSp, stop at H - 50
+    const ligPositions=[];
+    let ly=50+ligD/2;
+    while(ly < H-50){
+      ligPositions.push(ly);
+      ly+=ligSp;
+    }
+    // Always add a final lig at 50mm cover from the top
+    const topLig=H-50-ligD/2;
+    if(ligPositions.length===0 || ligPositions[ligPositions.length-1]<topLig-1)
+      ligPositions.push(topLig);
+
+    const ligEndL=cover+ligD/2;
+    const ligEndR=fw-cover-ligD/2;
+
+    ligPositions.forEach(ly_=>{
+      ents.push(new PolyLine_([[ox+ligEndL,oy+ly_,0],[ox+ligEndR,oy+ly_,0]],{width:ligD,...reo}));
+      const pr=ligD/4;
+      ents.push(new PolyLine_([[ox+ligEndL-pr,oy+ly_,0],[ox+ligEndL+pr,oy+ly_,0]],{closed:1,width:ligD/2,bulge:-1,...reo}));
+      ents.push(new PolyLine_([[ox+ligEndR-pr,oy+ly_,0],[ox+ligEndR+pr,oy+ly_,0]],{closed:1,width:ligD/2,bulge:-1,...reo}));
+    });
+
+    // Main bars as outlines (rectangles of width barD, full column height)
+    const barXs=v.getBars();
+    barXs.forEach(bx=>{
+      ents.push(new PolyLine_([
+        [ox+bx-barD/2,oy,0],[ox+bx+barD/2,oy,0],
+        [ox+bx+barD/2,oy+H,0],[ox+bx-barD/2,oy+H,0]
+      ],{closed:1,...reo}));
+    });
+
+    // Starter bars: solid (wide polyline), lapping 40db with main bars
+    // Bottom starters: from (oy - starterExt) to (oy + lap), cog at bottom
+    // Top starters: from (oy + H - lap) to (oy + H + starterExt), cog at top
+    if(barXs.length>0){
+      barXs.forEach((bx,idx)=>{
+        let sOff;
+        if(idx===0) sOff=starterOff;
+        else if(idx===barXs.length-1) sOff=-starterOff;
+        else sOff=starterOff;
+
+        const sx=bx+sOff;
+        const cogDir=(idx===barXs.length-1)?-1:1;
+        const bpr=barD/4;
+
+        // --- Bottom starter ---
+        const bBot=oy-starterExt;
+        const bTop=oy+lap;
+        // Solid bar from bottom of cog arc to top of lap
+        ents.push(new PolyLine_([[ox+sx,bBot,0],[ox+sx,bTop,0]],{width:barD,...reo}));
+        // Solid cap at top (rounded end)
+        ents.push(new PolyLine_([[ox+sx-bpr,bTop,0],[ox+sx+bpr,bTop,0]],{closed:1,width:barD/2,bulge:-1,...reo}));
+
+        // Bottom cog at bBot: vertical bar transitions to horizontal tail
+        // Arc centre at (ox+sx+cogDir*cogR, bBot)
+        // Bar meets arc at (ox+sx, bBot) → angle: cogDir>0 ? 180° : 0°
+        // Arc end at bottom of arc → angle: cogDir>0 ? 270° : 270° but short way
+        // For cogDir>0: 180° → 270° = 90° CW sweep ✓
+        // For cogDir=-1: 0° → 270° going SHORT way = 0° → -90° (same as 270°)
+        const bcCx=ox+sx+cogDir*cogR, bcCy=bBot;
+        const bcSA=cogDir>0?180:0;
+        const bcEA=cogDir>0?270:-90;
+        const bcArc=arcPts(bcCx,bcCy,cogR,bcSA,bcEA,8);
+        ents.push(new PolyLine_(bcArc.map(p=>[p[0],p[1],0]),{width:barD,...reo}));
+        // Tail goes horizontal in cogDir from arc end
+        const bcLast=bcArc[bcArc.length-1];
+        ents.push(new PolyLine_([[bcLast[0],bcLast[1],0],[bcLast[0]+cogDir*cogTail,bcLast[1],0]],{width:barD,...reo}));
+
+        // --- Top starter ---
+        const tBot=oy+H-lap;
+        const tTop=oy+H+starterExt;
+        // Solid bar from bottom of lap to top
+        ents.push(new PolyLine_([[ox+sx,tBot,0],[ox+sx,tTop,0]],{width:barD,...reo}));
+        // Solid cap at bottom (rounded end)
+        ents.push(new PolyLine_([[ox+sx-bpr,tBot,0],[ox+sx+bpr,tBot,0]],{closed:1,width:barD/2,bulge:-1,...reo}));
+
+        // Top cog at tTop: vertical bar transitions to horizontal tail
+        // Arc centre at (ox+sx+cogDir*cogR, tTop)
+        // Bar meets arc at (ox+sx, tTop) → angle: cogDir>0 ? 180° : 0°
+        // Arc end at top of arc → angle: cogDir>0 ? 90° : 90° but short way
+        // For cogDir>0: 180° → 90° = 90° CCW sweep ✓
+        // For cogDir=-1: 0° → 90° = 90° CCW sweep ✓
+        const tcCx=ox+sx+cogDir*cogR, tcCy=tTop;
+        const tcSA=cogDir>0?180:0;
+        const tcEA=90;
+        const tcArc=arcPts(tcCx,tcCy,cogR,tcSA,tcEA,8);
+        ents.push(new PolyLine_(tcArc.map(p=>[p[0],p[1],0]),{width:barD,...reo}));
+        // Tail goes horizontal in cogDir from arc end
+        const tcLast=tcArc[tcArc.length-1];
+        ents.push(new PolyLine_([[tcLast[0],tcLast[1],0],[tcLast[0]+cogDir*cogTail,tcLast[1],0]],{width:barD,...reo}));
+      });
+    }
+  });
+}
+
+// ================================================================
+//  SLAB/WALL ELEVATIONS
+//  Draws 1 or 2 elevations below the section.
+//  Dual layer: one for bottom face, one for top face.
+//  Single layer: one elevation.
+//  Shows transverse bars as horizontal wide polylines with cogs/hooks
+//  at their configured spacing, plus starter bars with cogs.
+// ================================================================
+function addSlabElevations(ents, s){
+  const{W,D,cover}=gp();
+  const transD=+$('slabTrans').value;
+  const longD=+$('slabLong').value;
+  const longSp=Math.max(+$('slabLongSp').value||200, longD, 1);
+  const horizSp=Math.max(+$('slabHorizSp').value||200, transD, 1);
+  const H=+$('slabHeight').value||3000;
+  const starterExt=+$('slabStarterExt').value||200;
+  const starterOff=+$('slabStarterOff').value||10;
+  const dual=layerCfg==='dual';
+  const hc=HOOK_COG[transD]||HOOK_COG[16];
+  const cogR_t=bendR(transD);
+  const cogTail_t=Math.max(0,hc.cog90-cogR_t);
+  const hcL=HOOK_COG[longD]||HOOK_COG[16];
+  const cogR_l=bendR(longD);
+  const cogTail_l=Math.max(0,hcL.cog90-cogR_l);
+  const lap=40*longD;
+
+  const reo={layer:'REO',color:1};
+  const conc={layer:'CONCRETE',color:3};
+  const gap=Math.max(W,D)*0.5+200;
+
+  const elevViews=[];
+
+  if(dual){
+    elevViews.push({
+      label:'bottom', ox:0, oy:-(H+gap),
+      endL:$('endBotL').value, endR:$('endBotR').value, face:'bot'
+    });
+    elevViews.push({
+      label:'top', ox:W+gap, oy:-(H+gap),
+      endL:$('endTopL').value, endR:$('endTopR').value, face:'top'
+    });
+  } else {
+    elevViews.push({
+      label:'single', ox:0, oy:-(H+gap),
+      endL:$('endMidL').value, endR:$('endMidR').value, face:'mid'
+    });
+  }
+
+  elevViews.forEach(ev=>{
+    const ox=ev.ox, oy=ev.oy;
+
+    // Concrete outline
+    ents.push(new PolyLine_([[ox,oy,0],[ox+W,oy,0],[ox+W,oy+H,0],[ox,oy+H,0]],{closed:1,...conc}));
+
+    // Concrete hatch
+    const minS=Math.min(W,H)*0.012, maxS=Math.min(W,H)*0.025;
+    const margin_=cover*0.6;
+    const rng=seededRandom(Math.round(W*1000+H*7+ox*31+oy*13+42));
+    const lo={layer:'CONC_FILL',color:8};
+    const hZones=[
+      {x1:ox+W*0.5+margin_,y1:oy+margin_,x2:ox+W-margin_,y2:oy+H*0.5-margin_},
+      {x1:ox+margin_,y1:oy+H*0.5+margin_,x2:ox+W*0.5-margin_,y2:oy+H-margin_}
+    ];
+    hZones.forEach(z=>{
+      const zw=z.x2-z.x1,zh=z.y2-z.y1;if(zw<10||zh<10)return;
+      const count=Math.max(3,Math.round((zw*zh)/8000));
+      for(let i=0;i<count;i++){
+        const cx=z.x1+rng()*zw,cy=z.y1+rng()*zh;
+        const sz=minS+rng()*(maxS-minS);const kind=rng();
+        if(kind<0.4){
+          const ang=rng()*Math.PI*2;const pts=[];
+          for(let j=0;j<3;j++){const a=ang+j*Math.PI*2/3;pts.push([cx+sz*Math.cos(a),cy+sz*Math.sin(a),0]);}
+          ents.push(new PolyLine_(pts,{closed:1,...lo}));
+        }else if(kind<0.75){
+          ents.push(new Circle_([cx,cy,0],sz*0.5+rng()*sz*0.3,lo));
+        }else{
+          const pts=[];for(let j=0;j<4;j++){const a=rng()*Math.PI*2;const d=sz*(0.4+rng()*0.6);pts.push([cx+d*Math.cos(Math.PI/2*j+a*0.3),cy+d*Math.sin(Math.PI/2*j+a*0.3),0]);}
+          ents.push(new PolyLine_(pts,{closed:1,...lo}));
+        }
+      }
+    });
+
+    // Transverse bars (horizontal in elevation) at horizSp vertical spacing
+    // These match the section's parallel bars. In elevation they are
+    // viewed from the side, so section cogs/hooks appear rotated:
+    // - Section cog bends inward (toward section centre)
+    // - In elevation, "inward" = downward for bottom face, upward for top face
+    //   (i.e. AWAY from the slab surface being viewed)
+    const cogDirElev=(ev.face==='top')?1:-1;
+
+    let by_=50+transD/2;
+    const barPositions=[];
+    while(by_<H-50){
+      barPositions.push(by_);
+      by_+=horizSp;
+    }
+    const topBar=H-50-transD/2;
+    if(barPositions.length===0||barPositions[barPositions.length-1]<topBar-1)
+      barPositions.push(topBar);
+
+    // Use the same x positions as the section for the bar ends
+    // Section uses: x1 = cover + db/2 + trim, x2 = W - cover - db/2 - trim
+    const bx1=cover+transD/2;
+    const bx2=W-cover-transD/2;
+    const trimL=(ev.endL!=='none')?bendR(transD):0;
+    const trimR=(ev.endR!=='none')?bendR(transD):0;
+
+    barPositions.forEach((by__,bIdx)=>{
+      // Cog/hook direction: most bars go cogDirElev (away from surface).
+      // For bottom/mid face: the FIRST bar (at base) flips so cog goes UP into the elevation
+      // For top face: the LAST bar (at top) flips so cog goes DOWN into the elevation
+      let dir=cogDirElev;
+      if((ev.face==='bot'||ev.face==='mid') && bIdx===0) dir=-cogDirElev;
+      if(ev.face==='top' && bIdx===barPositions.length-1) dir=-cogDirElev;
+
+      // Main horizontal bar (trimmed same as section)
+      ents.push(new PolyLine_([[ox+bx1+trimL,oy+by__,0],[ox+bx2-trimR,oy+by__,0]],{width:transD,...reo}));
+
+      // Left end cog/hook
+      if(ev.endL==='cog90'){
+        const acCx=ox+bx1+cogR_t, acCy=oy+by__+dir*cogR_t;
+        const acSA=dir>0?270:90;
+        const acArc=arcPts(acCx,acCy,cogR_t,acSA,180,8);
+        ents.push(new PolyLine_(acArc.map(p=>[p[0],p[1],0]),{width:transD,...reo}));
+        ents.push(new PolyLine_([[ox+bx1,oy+by__+dir*cogR_t,0],[ox+bx1,oy+by__+dir*(cogR_t+cogTail_t),0]],{width:transD,...reo}));
+      } else if(ev.endL==='hook180'){
+        const hr=bendR(transD);
+        const hCx=ox+bx1+trimL, hCy=oy+by__+dir*hr;
+        const hSA=dir>0?270:90, hEA=dir>0?90:270;
+        const hArc=arcPts(hCx,hCy,hr,hSA,hEA,16);
+        ents.push(new PolyLine_(hArc.map(p=>[p[0],p[1],0]),{width:transD,...reo}));
+        const hLast=hArc[hArc.length-1];
+        const hTail=Math.max(4*transD,70);
+        ents.push(new PolyLine_([[hLast[0],hLast[1],0],[hLast[0]+hTail,hLast[1],0]],{width:transD,...reo}));
+      }
+
+      // Right end cog/hook
+      if(ev.endR==='cog90'){
+        const acCx=ox+bx2-cogR_t, acCy=oy+by__+dir*cogR_t;
+        const acSA=dir>0?270:90;
+        const acEA=dir>0?360:0;
+        const acArc=arcPts(acCx,acCy,cogR_t,acSA,acEA,8);
+        ents.push(new PolyLine_(acArc.map(p=>[p[0],p[1],0]),{width:transD,...reo}));
+        ents.push(new PolyLine_([[ox+bx2,oy+by__+dir*cogR_t,0],[ox+bx2,oy+by__+dir*(cogR_t+cogTail_t),0]],{width:transD,...reo}));
+      } else if(ev.endR==='hook180'){
+        const hr=bendR(transD);
+        const hCx=ox+bx2-trimR, hCy=oy+by__+dir*hr;
+        const hSA=dir>0?270:90, hEA=dir>0?450:-90;
+        const hArc=arcPts(hCx,hCy,hr,hSA,hEA,16);
+        ents.push(new PolyLine_(hArc.map(p=>[p[0],p[1],0]),{width:transD,...reo}));
+        const hLast=hArc[hArc.length-1];
+        const hTail=Math.max(4*transD,70);
+        ents.push(new PolyLine_([[hLast[0],hLast[1],0],[hLast[0]-hTail,hLast[1],0]],{width:transD,...reo}));
+      }
+    });
+
+    // Longitudinal bars as outlines (vertical rectangles)
+    // Use the actual circle x-positions from slabGeom so spacing matches section
+    // (accounts for encroachment from cogs/hooks pushing bars inward)
+    const usedXs=new Set();
+    s.circles.forEach(cb=>{
+      const rx=Math.round(cb.x*100)/100; // deduplicate by rounding
+      if(!usedXs.has(rx)){
+        usedXs.add(rx);
+        ents.push(new PolyLine_([
+          [ox+cb.x-longD/2,oy,0],[ox+cb.x+longD/2,oy,0],
+          [ox+cb.x+longD/2,oy+H,0],[ox+cb.x-longD/2,oy+H,0]
+        ],{closed:1,...reo}));
+      }
+    });
+
+    // Starter bars: solid wide polylines with cogs, lapping 40×longD
+    // At each unique longitudinal bar x-position from the section
+    const starterXs=[...usedXs].sort((a,b)=>a-b);
+    starterXs.forEach((lx,i)=>{
+      let sOff;
+      if(i===0) sOff=starterOff;
+      else if(i===starterXs.length-1) sOff=-starterOff;
+      else sOff=starterOff;
+      const sx=lx+sOff;
+      const cogDir=(i===starterXs.length-1)?-1:1;
+      const bpr=longD/4;
+
+      // Bottom starter: from (oy - starterExt) to (oy + lap)
+      const bBot=oy-starterExt;
+      const bTop=oy+lap;
+      ents.push(new PolyLine_([[ox+sx,bBot,0],[ox+sx,bTop,0]],{width:longD,...reo}));
+      ents.push(new PolyLine_([[ox+sx-bpr,bTop,0],[ox+sx+bpr,bTop,0]],{closed:1,width:longD/2,bulge:-1,...reo}));
+      // Bottom cog
+      const bcCx=ox+sx+cogDir*cogR_l, bcCy=bBot;
+      const bcSA=cogDir>0?180:0;
+      const bcEA=cogDir>0?270:-90;
+      const bcArc=arcPts(bcCx,bcCy,cogR_l,bcSA,bcEA,8);
+      ents.push(new PolyLine_(bcArc.map(p=>[p[0],p[1],0]),{width:longD,...reo}));
+      const bcLast=bcArc[bcArc.length-1];
+      ents.push(new PolyLine_([[bcLast[0],bcLast[1],0],[bcLast[0]+cogDir*cogTail_l,bcLast[1],0]],{width:longD,...reo}));
+
+      // Top starter: from (oy + H - lap) to (oy + H + starterExt)
+      const tBot=oy+H-lap;
+      const tTop=oy+H+starterExt;
+      ents.push(new PolyLine_([[ox+sx,tBot,0],[ox+sx,tTop,0]],{width:longD,...reo}));
+      ents.push(new PolyLine_([[ox+sx-bpr,tBot,0],[ox+sx+bpr,tBot,0]],{closed:1,width:longD/2,bulge:-1,...reo}));
+      // Top cog
+      const tcCx=ox+sx+cogDir*cogR_l, tcCy=tTop;
+      const tcSA=cogDir>0?180:0;
+      const tcEA=90;
+      const tcArc=arcPts(tcCx,tcCy,cogR_l,tcSA,tcEA,8);
+      ents.push(new PolyLine_(tcArc.map(p=>[p[0],p[1],0]),{width:longD,...reo}));
+      const tcLast=tcArc[tcArc.length-1];
+      ents.push(new PolyLine_([[tcLast[0],tcLast[1],0],[tcLast[0]+cogDir*cogTail_l,tcLast[1],0]],{width:longD,...reo}));
+    });
+  });
+}
+
 function makeDXF(){
   const{W,D,cover}=gp();
   const layers=[new Layer_({name:'CONCRETE',color:3}),new Layer_({name:'REO',color:1}),new Layer_({name:'CONC_FILL',color:8}),new Layer_()];
@@ -740,6 +1159,8 @@ function makeDXF(){
       const pr=c.barD/4;
       ents.push(new PolyLine_([[b.x-pr,b.y,0],[b.x+pr,b.y,0]],{closed:1,width:c.barD/2,bulge:-1,layer:'REO',color:1}));
     });
+    // Side elevations if checkbox is ticked
+    if($('inclElev').checked) addColumnElevations(ents, c);
   }else{
     ents.push(new PolyLine_([[0,0,0],[W,0,0],[W,D,0],[0,D,0]],{closed:1,layer:'CONCRETE',color:3}));
     const s=slabGeom();
@@ -763,10 +1184,29 @@ function makeDXF(){
       const pr=c.dia/4;
       ents.push(new PolyLine_([[c.x-pr,c.y,0],[c.x+pr,c.y,0]],{closed:1,width:c.dia/2,bulge:-1,layer:'REO',color:1}));
     });
+    // Slab/wall elevations if checkbox is ticked
+    if($('inclSlabElev').checked) addSlabElevations(ents, s);
   }
 
   addConcreteSymbols(ents,W,D,cover);
-  return new Drawing_({layers,entities:ents,extmin:[-10,-10],extmax:[W+10,D+10]}).toString();
+
+  // Expand extents if elevations are included
+  let emin=[-10,-10], emax=[W+10,D+10];
+  if(mode==='column' && $('inclElev').checked){
+    const H=+$('colHeight').value||3000;
+    const starterLap=+$('starterLap').value||200;
+    const g=Math.max(W,D)*0.5+200;
+    emin=[-(D+g+10), -(H+g+starterLap+300)];
+    emax=[W+g+D+10, D+g+H+starterLap+300];
+  }
+  if(mode==='slab' && $('inclSlabElev').checked){
+    const H=+$('slabHeight').value||3000;
+    const sExt=+$('slabStarterExt').value||200;
+    const g=Math.max(W,D)*0.5+200;
+    emin=[-(10), -(H+g+sExt+300)];
+    emax=[W+g+W+10, D+10];
+  }
+  return new Drawing_({layers,entities:ents,extmin:emin,extmax:emax}).toString();
 }
 
 $('exportBtn').addEventListener('click',()=>{
