@@ -196,33 +196,142 @@ body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;min
 
 <script>
 // ================================================================
-//  SDXF LIBRARY (embedded)
+//  SDXF LIBRARY (embedded) — AC1015 (R2000) subset of sdxf.js
+//  Unique handles + owners, AcDb subclass markers, root DICTIONARY,
+//  $HANDSEED from the last handle used. Hatch / HATCH_PATTERNS match
+//  sdxf.js: real HATCH entities (SOLID, ANSI31/32/37, NET, DOTS, EARTH
+//  or { name, lines }) instead of hand-drawn aggregate symbols.
 // ================================================================
 const NL=String.fromCharCode(10);
+let _dxfHandle=1,_H_MODEL_BTR='0';
+function _nextHandle(){return(_dxfHandle++).toString(16).toUpperCase();}
 function _point(x,index=0){return x.map((v,i)=>`${(i+1)*10+index}${NL}${v}`).join(NL);}
-function _points(p){return p.map((pt,i)=>_point(pt,i));}
+const _num=v=>Number(v.toFixed(10));
+const _rot=([x,y],deg)=>{const r=deg*Math.PI/180,c=Math.cos(r),s=Math.sin(r);return[x*c-y*s,x*s+y*c];};
 class Entity{
-  constructor({color=256,extrusion=null,layer='0',lineType=null,lineTypeScale=null,lineWeight=null,thickness=null,parent=null}={}){
-    this.color=color;this.extrusion=extrusion;this.layer=layer;this.lineType=lineType;this.lineTypeScale=lineTypeScale;this.lineWeight=lineWeight;this.thickness=thickness;this.parent=parent;
+  constructor({color=256,layer='0',lineType=null,lineWeight=null}={}){this.color=color;this.layer=layer;this.lineType=lineType;this.lineWeight=lineWeight;}
+  // Group 5: unique handle. Group 330: owner = *Model_Space block record.
+  _common(){const l=['5',_nextHandle(),'330',_H_MODEL_BTR,'100','AcDbEntity','8',this.layer];if(this.lineType!==null)l.push('6',this.lineType);if(this.lineWeight!==null)l.push('370',this.lineWeight);if(this.color!==null&&this.color!==256)l.push('62',this.color);return l.join(NL);}
+}
+class Layer_{
+  constructor({name='0',color=7,lineType='Continuous'}={}){this.name=name.toUpperCase();this.color=color;this.lineType=lineType;}
+  _rec(owner){return['0','LAYER','5',_nextHandle(),'330',owner,'100','AcDbSymbolTableRecord','100','AcDbLayerTableRecord','2',this.name,'70','0','62',this.color,'6',this.lineType,'370','-3','390','0'].join(NL);}
+}
+// LWPOLYLINE (2D). closed:1 closes it; bulge applies to every vertex, bulges[] per vertex.
+class LwPolyLine_ extends Entity{
+  constructor(points,{closed=0,width=null,bulge=null,bulges=null,...co}={}){super(co);this.points=points;this.closed=closed;this.width=width;this.bulge=bulge;this.bulges=bulges;}
+  toString(){if(!this.points||this.points.length<2)return'';const l=['0','LWPOLYLINE',this._common(),'100','AcDbPolyline','90',this.points.length,'70',this.closed?1:0];if(this.width!==null)l.push('43',this.width);this.points.forEach((p,i)=>{l.push('10',p[0],'20',p[1]);const b=this.bulges?this.bulges[i]:this.bulge;if(b!=null)l.push('42',b);});return l.join(NL);}
+}
+class Circle_ extends Entity{constructor(center=[0,0,0],radius=1,co={}){super(co);this.center=center;this.radius=radius;}toString(){return['0','CIRCLE',this._common(),'100','AcDbCircle',_point(this.center),'40',this.radius].join(NL);}}
+
+// ── Hatch (as sdxf.js) ───────────────────────────────────────────
+// acadiso.pat pattern lines: [angle, baseX, baseY, offsetX, offsetY, ...dashes]
+const HATCH_PATTERNS={
+  ANSI31:[[45,0,0,0,3.175]],                                        // general / brick / concrete section
+  ANSI32:[[45,0,0,0,9.525],[45,4.490128,0,0,9.525]],                // steel
+  ANSI37:[[45,0,0,0,3.175],[135,0,0,0,3.175]],                      // lead / cross hatch
+  NET:[[0,0,0,0,3.175],[90,0,0,0,3.175]],
+  DOTS:[[0,0,0,0.79375,1.5875,0,-1.5875]],
+  EARTH:[[0,0,0,6.35,6.35,6.35,-6.35],[0,0,2.38125,6.35,6.35,6.35,-6.35],
+         [0,0,4.7625,6.35,6.35,6.35,-6.35],[90,0.79375,5.55625,6.35,6.35,6.35,-6.35],
+         [90,3.175,5.55625,6.35,6.35,6.35,-6.35],[90,5.55625,5.55625,6.35,6.35,6.35,-6.35]],
+};
+/**
+ * Hatch inside one or more closed boundaries (the first is the outer, the rest are holes).
+ *   new Hatch([[0,0],[100,0],[100,50],[0,50]],{pattern:'ANSI31',scale:2})
+ *   new Hatch([outerPts,holePts],{pattern:'SOLID',color:8})
+ * A boundary is a point list or an LwPolyLine_ (its bulges are kept).
+ */
+class Hatch extends Entity{
+  constructor(boundaries,{pattern='SOLID',scale=1,angle=0,...co}={}){
+    super(co);
+    const single=boundaries instanceof LwPolyLine_||typeof boundaries?.[0]?.[0]==='number';
+    const list=single?[boundaries]:boundaries;
+    this.paths=list.map(b=>b instanceof LwPolyLine_
+      ?[b.points.map(p=>[p[0],p[1]]),b.bulges?[...b.bulges]:(b.bulge!==null?b.points.map(()=>b.bulge):null)]
+      :[b.map(p=>[p[0],p[1]]),null]);
+    // 3+ points, or 2 points joined by arcs (e.g. a circle made of two bulges)
+    if(!this.paths.length||this.paths.some(([p,bg])=>p.length<(bg&&bg.some(x=>x)?2:3)))
+      throw new Error('Hatch boundaries need at least 3 points each (or 2 with bulges)');
+    if(typeof pattern==='string'){
+      const name=pattern.toUpperCase();
+      if(name!=='SOLID'&&!HATCH_PATTERNS[name])
+        throw new Error(`Unknown hatch pattern '${pattern}'. Use SOLID, ${Object.keys(HATCH_PATTERNS).join(', ')} or { name, lines }`);
+      this.pattern={name,lines:HATCH_PATTERNS[name]||[]};
+    }else this.pattern={name:pattern.name.toUpperCase(),lines:pattern.lines};
+    this.scale=scale;this.angle=angle;
   }
-  _common(){const p=this.parent||this;const l=['5','1','8',p.layer];if(p.extrusion!==null)l.push(_point(p.extrusion,200));if(p.lineType!==null)l.push('6',p.lineType);if(p.lineWeight!==null)l.push('370',p.lineWeight);if(p.lineTypeScale!==null)l.push('48',p.lineTypeScale);if(p.thickness!==null)l.push('39',p.thickness);if(p.color!==null)l.push('62',p.color);return l.join(NL);}
+  get solid(){return this.pattern.name==='SOLID';}
+  toString(){
+    const l=['0','HATCH',this._common(),'100','AcDbHatch','10','0','20','0','30','0','210','0','220','0','230','1',
+             '2',this.pattern.name,'70',this.solid?1:0,'71','0','91',this.paths.length];
+    this.paths.forEach(([pts,bulges],i)=>{
+      const hasBulge=!!bulges&&bulges.some(b=>b);
+      l.push('92',i===0?3:2,'72',hasBulge?1:0,'73','1','93',pts.length);  // 1 external | 2 polyline
+      pts.forEach((p,k)=>{l.push('10',p[0],'20',p[1]);if(hasBulge)l.push('42',bulges[k]||0);});
+      l.push('97','0');
+    });
+    l.push('75','0','76','1');   // normal island style, predefined pattern
+    if(!this.solid){
+      l.push('52',this.angle,'41',this.scale,'77','0','78',this.pattern.lines.length);
+      for(const[a,bx,by,dx,dy,...dashes]of this.pattern.lines){
+        const base=_rot([bx*this.scale,by*this.scale],this.angle);
+        const off=_rot([dx*this.scale,dy*this.scale],a+this.angle);
+        l.push('53',a+this.angle,'43',_num(base[0]),'44',_num(base[1]),'45',_num(off[0]),'46',_num(off[1]),'79',dashes.length);
+        dashes.forEach(d=>l.push('49',_num(d*this.scale)));
+      }
+    }
+    l.push('98','0');
+    return l.join(NL);
+  }
 }
-class Collection{constructor(e=[]){this.entities=[...e];}append(e){this.entities.push(e);}toString(){return this.entities.map(e=>e.toString()).join(NL);}}
-class Layer_{constructor({name='pydxf',color=7,lineType='continuous',flag=64}={}){this.name=name.toUpperCase();this.color=color;this.lineType=lineType;this.flag=flag;}toString(){return['0','LAYER','2',this.name,'70',this.flag,'62',this.color,'6',this.lineType].join(NL);}}
-class LineType_{constructor({name='continuous',description='Solid line',elements=[],flag=64}={}){this.name=name.toUpperCase();this.description=description;this.elements=[...elements];this.flag=flag;}toString(){return['0','LTYPE','2',this.name,'70',this.flag,'3',this.description,'72','65','73',this.elements.length,'40','0.0'].join(NL);}}
-class Style_{constructor({name='standard',flag=0,height=0,widthFactor=40,obliqueAngle=50,mirror=0,lastHeight=1,font='arial.ttf',bigFont=''}={}){this.name=name.toUpperCase();this.flag=flag;this.height=height;this.widthFactor=widthFactor;this.obliqueAngle=obliqueAngle;this.mirror=mirror;this.lastHeight=lastHeight;this.font=font.toUpperCase();this.bigFont=bigFont.toUpperCase();}toString(){return['0','STYLE','2',this.name,'70',this.flag,'40',this.flag,'41',this.widthFactor,'50',this.obliqueAngle,'71',this.mirror,'42',this.lastHeight,'3',this.font,'4',this.bigFont].join(NL);}}
-class PolyLine_ extends Entity{
-  constructor(points,{flag=0,width=null,elevation=null,closed=0,bulge=null,...co}={}){super(co);this.points=points;this.flag=flag;this.width=width;this.elevation=elevation;this.closed=closed;this.bulge=bulge;}
-  toString(){const l=['0','POLYLINE',this._common()];if(this.elevation!==null)l.push('66','1','10','0','20','0','30',this.elevation);else l.push('66','1','10','0','20','0','30','0');if(this.closed)l.push('70','1');if(this.width!==null)l.push('40',this.width,'41',this.width);for(let p of this.points){l.push('0','VERTEX','5','2',_point(p),'8','0');if(this.bulge!==null)l.push('42',this.bulge);}l.push('0','SEQEND');return l.join(NL);}
-}
-class Circle_ extends Entity{constructor(center=[0,0,0],radius=1,co={}){super(co);this.center=center;this.radius=radius;}toString(){return['0','CIRCLE',this._common(),_point(this.center),'40',this.radius].join(NL);}}
-class Drawing_ extends Collection{
-  constructor({insbase=[0,0,0],extmin=[0,0],extmax=[0,0],layers=[new Layer_()],linetypes=[new LineType_()],styles=[new Style_()],views=[],blocks=[],entities=[]}={}){super(entities);this.insbase=insbase;this.extmin=extmin;this.extmax=extmax;this.layers=[...layers];this.linetypes=[...linetypes];this.styles=[...styles];this.views=[...views];this.blocks=[...blocks];this._acadver=['9','$ACADVER','1','AC1006'].join(NL);this._HP=['insbase','extmin','extmax'];}
-  _name(x){return['9',`$${x.toUpperCase()}`].join(NL);}
-  _dp(n,x){return[this._name(n),_point(x)].join(NL);}
-  _section(n,items){const x=items&&items.length>0?NL+items.join(NL):'';return['0','SECTION','2',n.toUpperCase()+x,'0','ENDSEC'].join(NL);}
-  _table(n,items){const x=items&&items.length>0?NL+items.join(NL):'';return['0','TABLE','2',n.toUpperCase(),'70',items.length.toString()+x,'0','ENDTAB'].join(NL);}
-  toString(){const hi=[this._acadver];for(const a of this._HP)hi.push(this._dp(a,this[a]));const h=this._section('header',hi);const t=this._section('tables',[this._table('ltype',this.linetypes.map(x=>x.toString())),this._table('layer',this.layers.map(x=>x.toString())),this._table('style',this.styles.map(x=>x.toString())),this._table('view',this.views.map(x=>x.toString()))]);const b=this._section('blocks',this.blocks.map(x=>x.toString()));const e=this._section('entities',this.entities.map(x=>x.toString()));return[h,t,b,e,'0','EOF',''].join(NL);}
+
+class Drawing_{
+  constructor({layers=[],entities=[],extmin=[0,0],extmax=[0,0]}={}){this.layers=layers;this.entities=entities;this.extmin=extmin;this.extmax=extmax;}
+  _section(n,items){const f=items.filter(s=>s&&s.trim());return['0','SECTION','2',n,...(f.length?[f.join(NL)]:[]),'0','ENDSEC'].join(NL);}
+  _table(n,h,owner,recs){return['0','TABLE','2',n,'5',h,'330',owner,'100','AcDbSymbolTable','70',recs.length,...(n==='DIMSTYLE'?['100','AcDbDimStyleTable']:[]),...recs,'0','ENDTAB'].join(NL);}
+  toString(){
+    _dxfHandle=1;
+    const H=()=>_nextHandle();
+    const hRoot=H(),hGroups=H();
+    const tbl={};['VPORT','LTYPE','LAYER','STYLE','VIEW','UCS','APPID','DIMSTYLE','BLOCK_RECORD'].forEach(n=>tbl[n]=H());
+    _H_MODEL_BTR=H();const hPaper=H();
+    const rec=(type,owner,sub,...rest)=>['0',type,'5',H(),'330',owner,'100','AcDbSymbolTableRecord','100',sub,...rest].join(NL);
+    const ltypes=[['ByBlock',''],['ByLayer',''],['Continuous','Solid line']].map(([n,d])=>rec('LTYPE',tbl.LTYPE,'AcDbLinetypeTableRecord','2',n,'70','0','3',d,'72','65','73','0','40','0.0'));
+    const layers=[...this.layers];
+    if(!layers.some(x=>x.name==='0'))layers.unshift(new Layer_());
+    const dimstyle=['0','DIMSTYLE','105',H(),'330',tbl.DIMSTYLE,'100','AcDbSymbolTableRecord','100','AcDbDimStyleTableRecord','2','Standard','70','0'].join(NL);
+    const tables=this._section('TABLES',[
+      this._table('VPORT',tbl.VPORT,'0',[]),
+      this._table('LTYPE',tbl.LTYPE,'0',ltypes),
+      this._table('LAYER',tbl.LAYER,'0',layers.map(x=>x._rec(tbl.LAYER))),
+      this._table('STYLE',tbl.STYLE,'0',[rec('STYLE',tbl.STYLE,'AcDbTextStyleTableRecord','2','Standard','70','0','40','0','41','1','50','0','71','0','42','2.5','3','txt','4','')]),
+      this._table('VIEW',tbl.VIEW,'0',[]),
+      this._table('UCS',tbl.UCS,'0',[]),
+      this._table('APPID',tbl.APPID,'0',[rec('APPID',tbl.APPID,'AcDbRegAppTableRecord','2','ACAD','70','0')]),
+      this._table('DIMSTYLE',tbl.DIMSTYLE,'0',[dimstyle]),
+      this._table('BLOCK_RECORD',tbl.BLOCK_RECORD,'0',[[_H_MODEL_BTR,'*Model_Space'],[hPaper,'*Paper_Space']].map(([h,n])=>
+        ['0','BLOCK_RECORD','5',h,'330',tbl.BLOCK_RECORD,'100','AcDbSymbolTableRecord','100','AcDbBlockTableRecord','2',n,'340','0'].join(NL))),
+    ]);
+    const blk=(owner,n)=>['0','BLOCK','5',H(),'330',owner,'100','AcDbEntity','8','0','100','AcDbBlockBegin','2',n,'70','0',_point([0,0,0]),'3',n,'1','',
+                          '0','ENDBLK','5',H(),'330',owner,'100','AcDbEntity','8','0','100','AcDbBlockEnd'].join(NL);
+    const blocks=this._section('BLOCKS',[blk(_H_MODEL_BTR,'*Model_Space'),blk(hPaper,'*Paper_Space')]);
+    const entities=this._section('ENTITIES',this.entities.map(e=>e.toString()));
+    const objects=this._section('OBJECTS',[
+      ['0','DICTIONARY','5',hRoot,'330','0','100','AcDbDictionary','281','1','3','ACAD_GROUP','350',hGroups].join(NL),
+      ['0','DICTIONARY','5',hGroups,'330',hRoot,'100','AcDbDictionary','281','1'].join(NL),
+    ]);
+    // HEADER written last so $HANDSEED is above every handle used
+    const header=this._section('HEADER',[
+      ['9','$ACADVER','1','AC1015'].join(NL),
+      ['9','$HANDSEED','5',H()].join(NL),
+      ['9','$INSUNITS','70','4'].join(NL),
+      ['9','$MEASUREMENT','70','1'].join(NL),
+      ['9','$EXTMIN',_point([...this.extmin,0])].join(NL),
+      ['9','$EXTMAX',_point([...this.extmax,0])].join(NL),
+    ]);
+    return[header,tables,blocks,entities,objects,'0','EOF',''].join(NL);
+  }
 }
 
 // ================================================================
@@ -717,37 +826,16 @@ function makeHookPts(x,y,db,side,face){
 }
 
 // ================================================================
-//  CONCRETE INFILL SYMBOLS
+//  CONCRETE HATCH / BAR FILLS
 // ================================================================
-function seededRandom(seed){return function(){seed|=0;seed=seed+0x6D2B79F5|0;let t=Math.imul(seed^seed>>>15,1|seed);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
-
-function addConcreteSymbols(ents,W,D,cover){
-  const minS=Math.min(W,D)*0.018,maxS=Math.min(W,D)*0.04;
-  const margin=cover*0.6;
-  const rng=seededRandom(Math.round(W*1000+D*7+cover*31));
-  const lo={layer:'CONC_FILL',color:8};
-  const zones=[
-    {x1:W*0.5+margin,y1:margin,x2:W-margin,y2:D*0.5-margin},
-    {x1:margin,y1:D*0.5+margin,x2:W*0.5-margin,y2:D-margin}
-  ];
-  zones.forEach(z=>{
-    const zw=z.x2-z.x1,zh=z.y2-z.y1;if(zw<10||zh<10)return;
-    const count=Math.max(4,Math.round((zw*zh)/2500));
-    for(let i=0;i<count;i++){
-      const cx=z.x1+rng()*zw,cy=z.y1+rng()*zh;
-      const sz=minS+rng()*(maxS-minS);const kind=rng();
-      if(kind<0.4){
-        const ang=rng()*Math.PI*2;const pts=[];
-        for(let j=0;j<3;j++){const a=ang+j*Math.PI*2/3;pts.push([cx+sz*Math.cos(a),cy+sz*Math.sin(a),0]);}
-        ents.push(new PolyLine_(pts,{closed:1,...lo}));
-      }else if(kind<0.75){
-        ents.push(new Circle_([cx,cy,0],sz*0.5+rng()*sz*0.3,lo));
-      }else{
-        const pts=[];for(let j=0;j<4;j++){const a=rng()*Math.PI*2;const d=sz*(0.4+rng()*0.6);pts.push([cx+d*Math.cos(Math.PI/2*j+a*0.3),cy+d*Math.sin(Math.PI/2*j+a*0.3),0]);}
-        ents.push(new PolyLine_(pts,{closed:1,...lo}));
-      }
-    }
-  });
+// Concrete hatch: ANSI31 at a scale tied to the smaller section dimension
+// (300 mm → scale 5, as in sdxf.js examples/beam_section.js)
+function concHatch(boundary,a,b){
+  return new Hatch(boundary,{pattern:'ANSI31',scale:Math.max(1,Math.round(Math.min(a,b)/60)),layer:'CONC_FILL',color:8});
+}
+// Filled bar / bar end: circle of two half-circle bulges, SOLID hatched
+function solidDisc(x,y,r,o){
+  return new Hatch(new LwPolyLine_([[x-r,y],[x+r,y]],{closed:1,bulge:1}),{pattern:'SOLID',...o});
 }
 
 // ================================================================
@@ -803,36 +891,9 @@ function addColumnElevations(ents, c){
     const ox=v.ox, oy=v.oy;
     const fw=v.faceW;
 
-    // Concrete outline
-    ents.push(new PolyLine_([[ox,oy,0],[ox+fw,oy,0],[ox+fw,oy+H,0],[ox,oy+H,0]],{closed:1,...conc}));
-
-    // Concrete hatch symbols offset to this view
-    const minS=Math.min(fw,H)*0.012, maxS=Math.min(fw,H)*0.025;
-    const margin_=cover*0.6;
-    const rng=seededRandom(Math.round(fw*1000+H*7+ox*31+oy*13));
-    const lo={layer:'CONC_FILL',color:8};
-    const hZones=[
-      {x1:ox+fw*0.5+margin_,y1:oy+margin_,x2:ox+fw-margin_,y2:oy+H*0.5-margin_},
-      {x1:ox+margin_,y1:oy+H*0.5+margin_,x2:ox+fw*0.5-margin_,y2:oy+H-margin_}
-    ];
-    hZones.forEach(z=>{
-      const zw=z.x2-z.x1,zh=z.y2-z.y1;if(zw<10||zh<10)return;
-      const count=Math.max(3,Math.round((zw*zh)/8000));
-      for(let i=0;i<count;i++){
-        const cx=z.x1+rng()*zw,cy=z.y1+rng()*zh;
-        const sz=minS+rng()*(maxS-minS);const kind=rng();
-        if(kind<0.4){
-          const ang=rng()*Math.PI*2;const pts=[];
-          for(let j=0;j<3;j++){const a=ang+j*Math.PI*2/3;pts.push([cx+sz*Math.cos(a),cy+sz*Math.sin(a),0]);}
-          ents.push(new PolyLine_(pts,{closed:1,...lo}));
-        }else if(kind<0.75){
-          ents.push(new Circle_([cx,cy,0],sz*0.5+rng()*sz*0.3,lo));
-        }else{
-          const pts=[];for(let j=0;j<4;j++){const a=rng()*Math.PI*2;const d=sz*(0.4+rng()*0.6);pts.push([cx+d*Math.cos(Math.PI/2*j+a*0.3),cy+d*Math.sin(Math.PI/2*j+a*0.3),0]);}
-          ents.push(new PolyLine_(pts,{closed:1,...lo}));
-        }
-      }
-    });
+    // Concrete outline + hatch
+    ents.push(concHatch([[ox,oy,0],[ox+fw,oy,0],[ox+fw,oy+H,0],[ox,oy+H,0]],fw,H));
+    ents.push(new LwPolyLine_([[ox,oy,0],[ox+fw,oy,0],[ox+fw,oy+H,0],[ox,oy+H,0]],{closed:1,...conc}));
 
     // Ligature positions: first at 50 + ligD/2 from bottom, then at ligSp, stop at H - 50
     const ligPositions=[];
@@ -850,16 +911,16 @@ function addColumnElevations(ents, c){
     const ligEndR=fw-cover-ligD/2;
 
     ligPositions.forEach(ly_=>{
-      ents.push(new PolyLine_([[ox+ligEndL,oy+ly_,0],[ox+ligEndR,oy+ly_,0]],{width:ligD,...reo}));
+      ents.push(new LwPolyLine_([[ox+ligEndL,oy+ly_,0],[ox+ligEndR,oy+ly_,0]],{width:ligD,...reo}));
       const pr=ligD/4;
-      ents.push(new PolyLine_([[ox+ligEndL-pr,oy+ly_,0],[ox+ligEndL+pr,oy+ly_,0]],{closed:1,width:ligD/2,bulge:-1,...reo}));
-      ents.push(new PolyLine_([[ox+ligEndR-pr,oy+ly_,0],[ox+ligEndR+pr,oy+ly_,0]],{closed:1,width:ligD/2,bulge:-1,...reo}));
+      ents.push(solidDisc(ox+ligEndL,oy+ly_,ligD/2,{...reo}));
+      ents.push(solidDisc(ox+ligEndR,oy+ly_,ligD/2,{...reo}));
     });
 
     // Main bars as outlines (rectangles of width barD, full column height)
     const barXs=v.getBars();
     barXs.forEach(bx=>{
-      ents.push(new PolyLine_([
+      ents.push(new LwPolyLine_([
         [ox+bx-barD/2,oy,0],[ox+bx+barD/2,oy,0],
         [ox+bx+barD/2,oy+H,0],[ox+bx-barD/2,oy+H,0]
       ],{closed:1,...reo}));
@@ -883,9 +944,9 @@ function addColumnElevations(ents, c){
         const bBot=oy-starterExt;
         const bTop=oy+lap;
         // Solid bar from bottom of cog arc to top of lap
-        ents.push(new PolyLine_([[ox+sx,bBot,0],[ox+sx,bTop,0]],{width:barD,...reo}));
+        ents.push(new LwPolyLine_([[ox+sx,bBot,0],[ox+sx,bTop,0]],{width:barD,...reo}));
         // Solid cap at top (rounded end)
-        ents.push(new PolyLine_([[ox+sx-bpr,bTop,0],[ox+sx+bpr,bTop,0]],{closed:1,width:barD/2,bulge:-1,...reo}));
+        ents.push(solidDisc(ox+sx,bTop,barD/2,{...reo}));
 
         // Bottom cog at bBot: vertical bar transitions to horizontal tail
         // Arc centre at (ox+sx+cogDir*cogR, bBot)
@@ -897,18 +958,18 @@ function addColumnElevations(ents, c){
         const bcSA=cogDir>0?180:0;
         const bcEA=cogDir>0?270:-90;
         const bcArc=arcPts(bcCx,bcCy,cogR,bcSA,bcEA,8);
-        ents.push(new PolyLine_(bcArc.map(p=>[p[0],p[1],0]),{width:barD,...reo}));
+        ents.push(new LwPolyLine_(bcArc.map(p=>[p[0],p[1],0]),{width:barD,...reo}));
         // Tail goes horizontal in cogDir from arc end
         const bcLast=bcArc[bcArc.length-1];
-        ents.push(new PolyLine_([[bcLast[0],bcLast[1],0],[bcLast[0]+cogDir*cogTail,bcLast[1],0]],{width:barD,...reo}));
+        ents.push(new LwPolyLine_([[bcLast[0],bcLast[1],0],[bcLast[0]+cogDir*cogTail,bcLast[1],0]],{width:barD,...reo}));
 
         // --- Top starter ---
         const tBot=oy+H-lap;
         const tTop=oy+H+starterExt;
         // Solid bar from bottom of lap to top
-        ents.push(new PolyLine_([[ox+sx,tBot,0],[ox+sx,tTop,0]],{width:barD,...reo}));
+        ents.push(new LwPolyLine_([[ox+sx,tBot,0],[ox+sx,tTop,0]],{width:barD,...reo}));
         // Solid cap at bottom (rounded end)
-        ents.push(new PolyLine_([[ox+sx-bpr,tBot,0],[ox+sx+bpr,tBot,0]],{closed:1,width:barD/2,bulge:-1,...reo}));
+        ents.push(solidDisc(ox+sx,tBot,barD/2,{...reo}));
 
         // Top cog at tTop: vertical bar transitions to horizontal tail
         // Arc centre at (ox+sx+cogDir*cogR, tTop)
@@ -920,10 +981,10 @@ function addColumnElevations(ents, c){
         const tcSA=cogDir>0?180:0;
         const tcEA=90;
         const tcArc=arcPts(tcCx,tcCy,cogR,tcSA,tcEA,8);
-        ents.push(new PolyLine_(tcArc.map(p=>[p[0],p[1],0]),{width:barD,...reo}));
+        ents.push(new LwPolyLine_(tcArc.map(p=>[p[0],p[1],0]),{width:barD,...reo}));
         // Tail goes horizontal in cogDir from arc end
         const tcLast=tcArc[tcArc.length-1];
-        ents.push(new PolyLine_([[tcLast[0],tcLast[1],0],[tcLast[0]+cogDir*cogTail,tcLast[1],0]],{width:barD,...reo}));
+        ents.push(new LwPolyLine_([[tcLast[0],tcLast[1],0],[tcLast[0]+cogDir*cogTail,tcLast[1],0]],{width:barD,...reo}));
       });
     }
   });
@@ -980,36 +1041,9 @@ function addSlabElevations(ents, s){
   elevViews.forEach(ev=>{
     const ox=ev.ox, oy=ev.oy;
 
-    // Concrete outline
-    ents.push(new PolyLine_([[ox,oy,0],[ox+W,oy,0],[ox+W,oy+H,0],[ox,oy+H,0]],{closed:1,...conc}));
-
-    // Concrete hatch
-    const minS=Math.min(W,H)*0.012, maxS=Math.min(W,H)*0.025;
-    const margin_=cover*0.6;
-    const rng=seededRandom(Math.round(W*1000+H*7+ox*31+oy*13+42));
-    const lo={layer:'CONC_FILL',color:8};
-    const hZones=[
-      {x1:ox+W*0.5+margin_,y1:oy+margin_,x2:ox+W-margin_,y2:oy+H*0.5-margin_},
-      {x1:ox+margin_,y1:oy+H*0.5+margin_,x2:ox+W*0.5-margin_,y2:oy+H-margin_}
-    ];
-    hZones.forEach(z=>{
-      const zw=z.x2-z.x1,zh=z.y2-z.y1;if(zw<10||zh<10)return;
-      const count=Math.max(3,Math.round((zw*zh)/8000));
-      for(let i=0;i<count;i++){
-        const cx=z.x1+rng()*zw,cy=z.y1+rng()*zh;
-        const sz=minS+rng()*(maxS-minS);const kind=rng();
-        if(kind<0.4){
-          const ang=rng()*Math.PI*2;const pts=[];
-          for(let j=0;j<3;j++){const a=ang+j*Math.PI*2/3;pts.push([cx+sz*Math.cos(a),cy+sz*Math.sin(a),0]);}
-          ents.push(new PolyLine_(pts,{closed:1,...lo}));
-        }else if(kind<0.75){
-          ents.push(new Circle_([cx,cy,0],sz*0.5+rng()*sz*0.3,lo));
-        }else{
-          const pts=[];for(let j=0;j<4;j++){const a=rng()*Math.PI*2;const d=sz*(0.4+rng()*0.6);pts.push([cx+d*Math.cos(Math.PI/2*j+a*0.3),cy+d*Math.sin(Math.PI/2*j+a*0.3),0]);}
-          ents.push(new PolyLine_(pts,{closed:1,...lo}));
-        }
-      }
-    });
+    // Concrete outline + hatch
+    ents.push(concHatch([[ox,oy,0],[ox+W,oy,0],[ox+W,oy+H,0],[ox,oy+H,0]],W,H));
+    ents.push(new LwPolyLine_([[ox,oy,0],[ox+W,oy,0],[ox+W,oy+H,0],[ox,oy+H,0]],{closed:1,...conc}));
 
     // Transverse bars (horizontal in elevation) at horizSp vertical spacing
     // These match the section's parallel bars. In elevation they are
@@ -1045,24 +1079,24 @@ function addSlabElevations(ents, s){
       if(ev.face==='top' && bIdx===barPositions.length-1) dir=-cogDirElev;
 
       // Main horizontal bar (trimmed same as section)
-      ents.push(new PolyLine_([[ox+bx1+trimL,oy+by__,0],[ox+bx2-trimR,oy+by__,0]],{width:transD,...reo}));
+      ents.push(new LwPolyLine_([[ox+bx1+trimL,oy+by__,0],[ox+bx2-trimR,oy+by__,0]],{width:transD,...reo}));
 
       // Left end cog/hook
       if(ev.endL==='cog90'){
         const acCx=ox+bx1+cogR_t, acCy=oy+by__+dir*cogR_t;
         const acSA=dir>0?270:90;
         const acArc=arcPts(acCx,acCy,cogR_t,acSA,180,8);
-        ents.push(new PolyLine_(acArc.map(p=>[p[0],p[1],0]),{width:transD,...reo}));
-        ents.push(new PolyLine_([[ox+bx1,oy+by__+dir*cogR_t,0],[ox+bx1,oy+by__+dir*(cogR_t+cogTail_t),0]],{width:transD,...reo}));
+        ents.push(new LwPolyLine_(acArc.map(p=>[p[0],p[1],0]),{width:transD,...reo}));
+        ents.push(new LwPolyLine_([[ox+bx1,oy+by__+dir*cogR_t,0],[ox+bx1,oy+by__+dir*(cogR_t+cogTail_t),0]],{width:transD,...reo}));
       } else if(ev.endL==='hook180'){
         const hr=bendR(transD);
         const hCx=ox+bx1+trimL, hCy=oy+by__+dir*hr;
         const hSA=dir>0?270:90, hEA=dir>0?90:270;
         const hArc=arcPts(hCx,hCy,hr,hSA,hEA,16);
-        ents.push(new PolyLine_(hArc.map(p=>[p[0],p[1],0]),{width:transD,...reo}));
+        ents.push(new LwPolyLine_(hArc.map(p=>[p[0],p[1],0]),{width:transD,...reo}));
         const hLast=hArc[hArc.length-1];
         const hTail=Math.max(4*transD,70);
-        ents.push(new PolyLine_([[hLast[0],hLast[1],0],[hLast[0]+hTail,hLast[1],0]],{width:transD,...reo}));
+        ents.push(new LwPolyLine_([[hLast[0],hLast[1],0],[hLast[0]+hTail,hLast[1],0]],{width:transD,...reo}));
       }
 
       // Right end cog/hook
@@ -1071,17 +1105,17 @@ function addSlabElevations(ents, s){
         const acSA=dir>0?270:90;
         const acEA=dir>0?360:0;
         const acArc=arcPts(acCx,acCy,cogR_t,acSA,acEA,8);
-        ents.push(new PolyLine_(acArc.map(p=>[p[0],p[1],0]),{width:transD,...reo}));
-        ents.push(new PolyLine_([[ox+bx2,oy+by__+dir*cogR_t,0],[ox+bx2,oy+by__+dir*(cogR_t+cogTail_t),0]],{width:transD,...reo}));
+        ents.push(new LwPolyLine_(acArc.map(p=>[p[0],p[1],0]),{width:transD,...reo}));
+        ents.push(new LwPolyLine_([[ox+bx2,oy+by__+dir*cogR_t,0],[ox+bx2,oy+by__+dir*(cogR_t+cogTail_t),0]],{width:transD,...reo}));
       } else if(ev.endR==='hook180'){
         const hr=bendR(transD);
         const hCx=ox+bx2-trimR, hCy=oy+by__+dir*hr;
         const hSA=dir>0?270:90, hEA=dir>0?450:-90;
         const hArc=arcPts(hCx,hCy,hr,hSA,hEA,16);
-        ents.push(new PolyLine_(hArc.map(p=>[p[0],p[1],0]),{width:transD,...reo}));
+        ents.push(new LwPolyLine_(hArc.map(p=>[p[0],p[1],0]),{width:transD,...reo}));
         const hLast=hArc[hArc.length-1];
         const hTail=Math.max(4*transD,70);
-        ents.push(new PolyLine_([[hLast[0],hLast[1],0],[hLast[0]-hTail,hLast[1],0]],{width:transD,...reo}));
+        ents.push(new LwPolyLine_([[hLast[0],hLast[1],0],[hLast[0]-hTail,hLast[1],0]],{width:transD,...reo}));
       }
     });
 
@@ -1093,7 +1127,7 @@ function addSlabElevations(ents, s){
       const rx=Math.round(cb.x*100)/100; // deduplicate by rounding
       if(!usedXs.has(rx)){
         usedXs.add(rx);
-        ents.push(new PolyLine_([
+        ents.push(new LwPolyLine_([
           [ox+cb.x-longD/2,oy,0],[ox+cb.x+longD/2,oy,0],
           [ox+cb.x+longD/2,oy+H,0],[ox+cb.x-longD/2,oy+H,0]
         ],{closed:1,...reo}));
@@ -1115,30 +1149,30 @@ function addSlabElevations(ents, s){
       // Bottom starter: from (oy - starterExt) to (oy + lap)
       const bBot=oy-starterExt;
       const bTop=oy+lap;
-      ents.push(new PolyLine_([[ox+sx,bBot,0],[ox+sx,bTop,0]],{width:longD,...reo}));
-      ents.push(new PolyLine_([[ox+sx-bpr,bTop,0],[ox+sx+bpr,bTop,0]],{closed:1,width:longD/2,bulge:-1,...reo}));
+      ents.push(new LwPolyLine_([[ox+sx,bBot,0],[ox+sx,bTop,0]],{width:longD,...reo}));
+      ents.push(solidDisc(ox+sx,bTop,longD/2,{...reo}));
       // Bottom cog
       const bcCx=ox+sx+cogDir*cogR_l, bcCy=bBot;
       const bcSA=cogDir>0?180:0;
       const bcEA=cogDir>0?270:-90;
       const bcArc=arcPts(bcCx,bcCy,cogR_l,bcSA,bcEA,8);
-      ents.push(new PolyLine_(bcArc.map(p=>[p[0],p[1],0]),{width:longD,...reo}));
+      ents.push(new LwPolyLine_(bcArc.map(p=>[p[0],p[1],0]),{width:longD,...reo}));
       const bcLast=bcArc[bcArc.length-1];
-      ents.push(new PolyLine_([[bcLast[0],bcLast[1],0],[bcLast[0]+cogDir*cogTail_l,bcLast[1],0]],{width:longD,...reo}));
+      ents.push(new LwPolyLine_([[bcLast[0],bcLast[1],0],[bcLast[0]+cogDir*cogTail_l,bcLast[1],0]],{width:longD,...reo}));
 
       // Top starter: from (oy + H - lap) to (oy + H + starterExt)
       const tBot=oy+H-lap;
       const tTop=oy+H+starterExt;
-      ents.push(new PolyLine_([[ox+sx,tBot,0],[ox+sx,tTop,0]],{width:longD,...reo}));
-      ents.push(new PolyLine_([[ox+sx-bpr,tBot,0],[ox+sx+bpr,tBot,0]],{closed:1,width:longD/2,bulge:-1,...reo}));
+      ents.push(new LwPolyLine_([[ox+sx,tBot,0],[ox+sx,tTop,0]],{width:longD,...reo}));
+      ents.push(solidDisc(ox+sx,tBot,longD/2,{...reo}));
       // Top cog
       const tcCx=ox+sx+cogDir*cogR_l, tcCy=tTop;
       const tcSA=cogDir>0?180:0;
       const tcEA=90;
       const tcArc=arcPts(tcCx,tcCy,cogR_l,tcSA,tcEA,8);
-      ents.push(new PolyLine_(tcArc.map(p=>[p[0],p[1],0]),{width:longD,...reo}));
+      ents.push(new LwPolyLine_(tcArc.map(p=>[p[0],p[1],0]),{width:longD,...reo}));
       const tcLast=tcArc[tcArc.length-1];
-      ents.push(new PolyLine_([[tcLast[0],tcLast[1],0],[tcLast[0]+cogDir*cogTail_l,tcLast[1],0]],{width:longD,...reo}));
+      ents.push(new LwPolyLine_([[tcLast[0],tcLast[1],0],[tcLast[0]+cogDir*cogTail_l,tcLast[1],0]],{width:longD,...reo}));
     });
   });
 }
@@ -1150,45 +1184,48 @@ function makeDXF(){
 
   if(mode==='column'){
     const c=colGeom();
-    if(c.chamfer>0){const ch=c.chamfer;ents.push(new PolyLine_([[ch,0,0],[W-ch,0,0],[W,ch,0],[W,D-ch,0],[W-ch,D,0],[ch,D,0],[0,D-ch,0],[0,ch,0]],{closed:1,layer:'CONCRETE',color:3}));}
-    else{ents.push(new PolyLine_([[0,0,0],[W,0,0],[W,D,0],[0,D,0]],{closed:1,layer:'CONCRETE',color:3}));}
+    const ch=c.chamfer;
+    const outline=ch>0?[[ch,0,0],[W-ch,0,0],[W,ch,0],[W,D-ch,0],[W-ch,D,0],[ch,D,0],[0,D-ch,0],[0,ch,0]]:[[0,0,0],[W,0,0],[W,D,0],[0,D,0]];
+    ents.push(concHatch(outline,W,D));
+    ents.push(new LwPolyLine_(outline,{closed:1,layer:'CONCRETE',color:3}));
     const lp=roundedRectPts(c.lx,c.by,c.rx,c.ty,c.ligR);
-    ents.push(new PolyLine_(lp.map(p=>[p[0],p[1],0]),{closed:1,width:c.ligD,layer:'REO',color:1}));
+    ents.push(new LwPolyLine_(lp.map(p=>[p[0],p[1],0]),{closed:1,width:c.ligD,layer:'REO',color:1}));
     c.bars.forEach(b=>{
       ents.push(new Circle_([b.x,b.y,0],c.barD/2,{layer:'REO',color:1}));
       const pr=c.barD/4;
-      ents.push(new PolyLine_([[b.x-pr,b.y,0],[b.x+pr,b.y,0]],{closed:1,width:c.barD/2,bulge:-1,layer:'REO',color:1}));
+      ents.push(solidDisc(b.x,b.y,c.barD/2,{layer:'REO',color:1}));
     });
     // Side elevations if checkbox is ticked
     if($('inclElev').checked) addColumnElevations(ents, c);
   }else{
-    ents.push(new PolyLine_([[0,0,0],[W,0,0],[W,D,0],[0,D,0]],{closed:1,layer:'CONCRETE',color:3}));
+    const outline=[[0,0,0],[W,0,0],[W,D,0],[0,D,0]];
+    ents.push(concHatch(outline,W,D));
+    ents.push(new LwPolyLine_(outline,{closed:1,layer:'CONCRETE',color:3}));
     const s=slabGeom();
     s.lines.forEach(l=>{
       // Main bar uses trimmed x1/x2 (shortened by bend radius where cog/hook present)
-      ents.push(new PolyLine_([[l.x1,l.y,0],[l.x2,l.y,0]],{width:l.dia,layer:'REO',color:1}));
+      ents.push(new LwPolyLine_([[l.x1,l.y,0],[l.x2,l.y,0]],{width:l.dia,layer:'REO',color:1}));
       // Cogs: arc + tail as separate polylines. Hooks: single polyline from bar end.
       if(l.endLeft==='cog90'){
         const c=makeCogPts(l.cogX1,l.y,l.dia,'left',l.face);
-        ents.push(new PolyLine_(c.arc.map(q=>[q[0],q[1],0]),{width:l.dia,layer:'REO',color:1}));
-        ents.push(new PolyLine_(c.tail.map(q=>[q[0],q[1],0]),{width:l.dia,layer:'REO',color:1}));
-      } else if(l.endLeft==='hook180'){const p=makeHookPts(l.x1,l.y,l.dia,'left',l.face);ents.push(new PolyLine_(p.map(q=>[q[0],q[1],0]),{width:l.dia,layer:'REO',color:1}));}
+        ents.push(new LwPolyLine_(c.arc.map(q=>[q[0],q[1],0]),{width:l.dia,layer:'REO',color:1}));
+        ents.push(new LwPolyLine_(c.tail.map(q=>[q[0],q[1],0]),{width:l.dia,layer:'REO',color:1}));
+      } else if(l.endLeft==='hook180'){const p=makeHookPts(l.x1,l.y,l.dia,'left',l.face);ents.push(new LwPolyLine_(p.map(q=>[q[0],q[1],0]),{width:l.dia,layer:'REO',color:1}));}
       if(l.endRight==='cog90'){
         const c=makeCogPts(l.cogX2,l.y,l.dia,'right',l.face);
-        ents.push(new PolyLine_(c.arc.map(q=>[q[0],q[1],0]),{width:l.dia,layer:'REO',color:1}));
-        ents.push(new PolyLine_(c.tail.map(q=>[q[0],q[1],0]),{width:l.dia,layer:'REO',color:1}));
-      } else if(l.endRight==='hook180'){const p=makeHookPts(l.x2,l.y,l.dia,'right',l.face);ents.push(new PolyLine_(p.map(q=>[q[0],q[1],0]),{width:l.dia,layer:'REO',color:1}));}
+        ents.push(new LwPolyLine_(c.arc.map(q=>[q[0],q[1],0]),{width:l.dia,layer:'REO',color:1}));
+        ents.push(new LwPolyLine_(c.tail.map(q=>[q[0],q[1],0]),{width:l.dia,layer:'REO',color:1}));
+      } else if(l.endRight==='hook180'){const p=makeHookPts(l.x2,l.y,l.dia,'right',l.face);ents.push(new LwPolyLine_(p.map(q=>[q[0],q[1],0]),{width:l.dia,layer:'REO',color:1}));}
     });
     s.circles.forEach(c=>{
       ents.push(new Circle_([c.x,c.y,0],c.dia/2,{layer:'REO',color:1}));
       const pr=c.dia/4;
-      ents.push(new PolyLine_([[c.x-pr,c.y,0],[c.x+pr,c.y,0]],{closed:1,width:c.dia/2,bulge:-1,layer:'REO',color:1}));
+      ents.push(solidDisc(c.x,c.y,c.dia/2,{layer:'REO',color:1}));
     });
     // Slab/wall elevations if checkbox is ticked
     if($('inclSlabElev').checked) addSlabElevations(ents, s);
   }
 
-  addConcreteSymbols(ents,W,D,cover);
 
   // Expand extents if elevations are included
   let emin=[-10,-10], emax=[W+10,D+10];
